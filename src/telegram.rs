@@ -1,5 +1,7 @@
-use std::{time::Duration};
+use std::time::Duration;
 
+use chrono::Utc;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -73,9 +75,16 @@ async fn run_poll_cycle(
 
     for bot in bots {
         if let Err(error) = poll_bot(state, config, whisper_config, &bot).await {
+            let suspended_until = poll_backoff_until(&error);
+            state.database().record_telegram_poll_failure(
+                &bot.bot_token,
+                suspended_until,
+                &error.to_string(),
+            )?;
             warn!(
                 account_id = bot.account_id,
                 tenant_id = %bot.tenant_id,
+                suspended_until = suspended_until.map(|value| value.to_rfc3339()),
                 error = %error,
                 "telegram bot poll failed"
             );
@@ -94,6 +103,7 @@ async fn poll_bot(
     let database = state.database();
     let offset = database.telegram_poll_offset(&bot.bot_token)?;
     let updates = get_updates(&state.http_client(), &config.api_base_url, &bot.bot_token, offset).await?;
+    database.clear_telegram_poll_failure(&bot.bot_token)?;
     if updates.is_empty() {
         return Ok(());
     }
@@ -139,22 +149,27 @@ async fn process_message(
     )?;
 
     let reply = if let Some(text) = message.text.as_deref() {
-        if text.trim() == "/start" {
+        let command = text.trim();
+        if command == "/start" {
             build_start_message(&account)
+        } else if command == "/new" || command.starts_with("/new@") {
+            companion::start_new_conversation(state.database().as_ref(), &account)?
+                .reply
+                .content
         } else {
             let tenant = state
                 .tenant(&account.tenant_id)
                 .await
                 .ok_or_else(|| AppError::InvalidState("tenant not found for telegram account".to_string()))?;
-            companion::respond_to_user_message(
+            let result = companion::respond_to_user_message(
                 state.database().as_ref(),
                 &state.http_client(),
                 &tenant,
                 &account,
                 text,
             )
-            .await?
-            .content
+            .await?;
+            format_telegram_reply(&result.reply.content, result.session_hint.as_deref())
         }
     } else if let Some(voice) = message.voice.as_ref() {
         match transcribe_voice_message(
@@ -182,8 +197,8 @@ async fn process_message(
                     &account,
                     &transcript,
                 )
-                .await?
-                .content
+                .await
+                .map(|result| format_telegram_reply(&result.reply.content, result.session_hint.as_deref()))?
             }
             Err(error) => {
                 warn!(
@@ -256,6 +271,28 @@ fn build_start_message(account: &crate::database::AuthenticatedAccount) -> Strin
             companion
         )
     }
+}
+
+fn format_telegram_reply(reply: &str, session_hint: Option<&str>) -> String {
+    match session_hint {
+        Some(hint) => format!("{reply}\n\n{hint}\nUse /new whenever you want a clean slate."),
+        None => reply.to_string(),
+    }
+}
+
+fn poll_backoff_until(error: &AppError) -> Option<chrono::DateTime<Utc>> {
+    let status = match error {
+        AppError::HttpClient(source) => source.status(),
+        _ => None,
+    };
+
+    let minutes = match status {
+        Some(StatusCode::NOT_FOUND) | Some(StatusCode::UNAUTHORIZED) => 30,
+        Some(StatusCode::TOO_MANY_REQUESTS) => 10,
+        _ => 2,
+    };
+
+    Some(Utc::now() + chrono::Duration::minutes(minutes))
 }
 
 async fn get_updates(

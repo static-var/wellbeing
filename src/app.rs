@@ -8,7 +8,7 @@ use std::{
 };
 
 use axum::{
-    extract::{Path as AxumPath, State},
+    extract::{Multipart, Path as AxumPath, State},
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{delete, get, post},
@@ -29,12 +29,15 @@ use crate::{
     },
     database::{AppDatabase, AuthenticatedAccount, ChatMessageRecord, ProfileRecord, UpsertProfileInput},
     error::AppError,
+    guardrails,
     provider::{GEMINI_OPENAI_BASE_URL, GEMINI_PROVIDER},
     tenant::{TenantRuntime, TenantSummary},
+    whisper,
 };
 
 const SESSION_COOKIE: &str = "wb_session";
 const SESSION_DAYS: i64 = 30;
+const MAX_AUDIO_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -147,6 +150,8 @@ struct ProfileEnvelope {
 #[derive(Debug, Serialize)]
 struct ChatMessagesEnvelope {
     messages: Vec<ChatMessageRecord>,
+    suggest_new_session: bool,
+    session_hint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,13 +161,20 @@ struct ChatRequest {
 
 #[derive(Debug, Serialize)]
 struct ChatReplyEnvelope {
+    transcript: Option<String>,
     reply: ChatMessageRecord,
+    suggest_new_session: bool,
+    session_hint: Option<String>,
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(landing_page))
         .route("/index.html", get(landing_page))
+        .route("/v2", get(v2_landing_page))
+        .route("/v2.html", get(v2_landing_page))
+        .route("/v3", get(v3_landing_page))
+        .route("/v3.html", get(v3_landing_page))
         .route("/login", get(auth_page))
         .route("/login.html", get(auth_page))
         .route("/signup", get(auth_page))
@@ -189,6 +201,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/me/account", delete(delete_account))
         .route("/api/chat/messages", get(list_messages))
         .route("/api/chat", post(send_chat))
+        .route("/api/chat/audio", post(send_audio_chat))
+        .route("/api/chat/new", post(start_new_chat))
         .route("/api/admin/tenants", post(create_tenant))
         .route("/api/admin/tenants/:tenant_id/model", post(update_tenant_model))
         .with_state(state)
@@ -196,6 +210,14 @@ pub fn router(state: AppState) -> Router {
 
 async fn landing_page(State(state): State<AppState>) -> Result<Html<String>, ApiError> {
     serve_html(&state.web_root, "index.html").await
+}
+
+async fn v2_landing_page(State(state): State<AppState>) -> Result<Html<String>, ApiError> {
+    serve_html(&state.web_root, "v2.html").await
+}
+
+async fn v3_landing_page(State(state): State<AppState>) -> Result<Html<String>, ApiError> {
+    serve_html(&state.web_root, "v3.html").await
 }
 
 async fn auth_page(State(state): State<AppState>) -> Result<Html<String>, ApiError> {
@@ -266,7 +288,7 @@ async fn list_tenants(State(state): State<AppState>) -> Json<Vec<TenantSummary>>
     let mut tenants = state
         .tenants
         .values()
-        .map(TenantRuntime::summary)
+        .map(TenantRuntime::public_summary)
         .collect::<Vec<_>>();
     tenants.sort_by(|left, right| left.id.cmp(&right.id));
     Json(tenants)
@@ -278,7 +300,7 @@ async fn get_tenant(
 ) -> impl IntoResponse {
     let state = state.inner.read().await;
     match state.tenants.get(&tenant_id) {
-        Some(tenant) => (StatusCode::OK, Json(tenant.summary())).into_response(),
+        Some(tenant) => (StatusCode::OK, Json(tenant.public_summary())).into_response(),
         None => ApiError::not_found(format!("tenant '{tenant_id}' not found")).into_response(),
     }
 }
@@ -418,17 +440,40 @@ fn validate_profile_request(request: &UpsertProfileInput) -> Result<(), ApiError
     NaiveTime::parse_from_str(request.checkin_local_time.trim(), "%H:%M").map_err(|_| {
         ApiError::bad_request("checkin_local_time must use HH:MM format".to_string())
     })?;
-    if request.personal_inference_enabled
-        && request
-            .personal_inference_model
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()
-            .is_empty()
-    {
-        return Err(ApiError::bad_request(
-            "personal_inference_model is required when personal inference is enabled".to_string(),
-        ));
+    for (field_name, value, max_len) in [
+        ("user_name", request.user_name.as_deref(), 80usize),
+        ("pronouns", request.pronouns.as_deref(), 40usize),
+        ("user_context", request.user_context.as_deref(), 600usize),
+        ("boundaries", request.boundaries.as_deref(), 400usize),
+        ("support_goals", request.support_goals.as_deref(), 400usize),
+        ("preferred_style", request.preferred_style.as_deref(), 160usize),
+        ("companion_tone", request.companion_tone.as_deref(), 80usize),
+    ] {
+        validate_profile_text_field(field_name, value, max_len)?;
+    }
+
+    Ok(())
+}
+
+fn validate_profile_text_field(
+    field_name: &str,
+    value: Option<&str>,
+    max_len: usize,
+) -> Result<(), ApiError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+
+    if value.chars().count() > max_len {
+        return Err(ApiError::bad_request(format!(
+            "{field_name} must be {max_len} characters or fewer"
+        )));
+    }
+
+    if guardrails::contains_prompt_injection(value) {
+        return Err(ApiError::bad_request(format!(
+            "{field_name} contains instructions that are not allowed in profile settings"
+        )));
     }
 
     Ok(())
@@ -449,12 +494,13 @@ fn validate_personal_inference_request(
         .is_some_and(|value| !value.is_empty());
     if !has_new_key && !current_profile.personal_inference_api_key_configured {
         return Err(ApiError::bad_request(
-            "add a Gemini API key before enabling personal inference".to_string(),
+            "add a Gemini API key before saving because this Wellbeing instance is BYOB-only"
+                .to_string(),
         ));
     }
     if has_new_key && env::var("WELLBEING_MASTER_KEY").is_err() {
         return Err(ApiError::bad_request(
-            "WELLBEING_MASTER_KEY must be set on the server before personal Gemini keys can be stored"
+            "this server is not configured to store Gemini keys yet; set WELLBEING_MASTER_KEY on the server and restart Wellbeing"
                 .to_string(),
         ));
     }
@@ -468,7 +514,12 @@ async fn list_messages(
 ) -> Result<Json<ChatMessagesEnvelope>, ApiError> {
     let account = require_auth(&state, &jar).await?;
     let messages = state.database.list_chat_messages(account.id, 100)?;
-    Ok(Json(ChatMessagesEnvelope { messages }))
+    let session_hint = companion::session_hint_for_account(state.database.as_ref(), &account)?;
+    Ok(Json(ChatMessagesEnvelope {
+        messages,
+        suggest_new_session: session_hint.is_some(),
+        session_hint,
+    }))
 }
 
 async fn send_chat(
@@ -481,12 +532,24 @@ async fn send_chat(
     if input.is_empty() {
         return Err(ApiError::bad_request("message must not be empty".to_string()));
     }
+    if input.chars().count() > 4000 {
+        return Err(ApiError::bad_request(
+            "message must be 4000 characters or fewer".to_string(),
+        ));
+    }
 
-    let tenant = state
-        .tenant(&account.tenant_id)
-        .await
-        .ok_or_else(|| ApiError::internal("tenant not found for account".to_string()))?;
-    let reply = companion::respond_to_user_message(
+    if input == "/new" {
+        let result = companion::start_new_conversation(state.database.as_ref(), &account)?;
+        return Ok(Json(ChatReplyEnvelope {
+            transcript: None,
+            reply: result.reply,
+            suggest_new_session: result.suggest_new_session,
+            session_hint: result.session_hint,
+        }));
+    }
+
+    let tenant = tenant_for_account(&state, &account).await?;
+    let result = companion::respond_to_user_message(
         state.database.as_ref(),
         &state.http_client,
         &tenant,
@@ -494,7 +557,100 @@ async fn send_chat(
         input,
     )
     .await?;
-    Ok(Json(ChatReplyEnvelope { reply }))
+    Ok(Json(ChatReplyEnvelope {
+        transcript: None,
+        reply: result.reply,
+        suggest_new_session: result.suggest_new_session,
+        session_hint: result.session_hint,
+    }))
+}
+
+async fn send_audio_chat(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    mut multipart: Multipart,
+) -> Result<Json<ChatReplyEnvelope>, ApiError> {
+    let account = require_auth(&state, &jar).await?;
+
+    let mut file_name = None;
+    let mut mime_type = None;
+    let mut audio_bytes = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| ApiError::bad_request(format!("failed to read audio upload: {error}")))? 
+    {
+        if field.name() != Some("audio") {
+            continue;
+        }
+
+        file_name = field.file_name().map(str::to_string);
+        mime_type = field.content_type().map(str::to_string);
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|error| ApiError::bad_request(format!("failed to read audio upload: {error}")))?;
+        if bytes.is_empty() {
+            return Err(ApiError::bad_request("audio upload was empty".to_string()));
+        }
+        if bytes.len() > MAX_AUDIO_UPLOAD_BYTES {
+            return Err(ApiError::bad_request(
+                "audio upload is too large; keep voice notes under 12 MB".to_string(),
+            ));
+        }
+        audio_bytes = Some(bytes.to_vec());
+        break;
+    }
+
+    let audio_bytes = audio_bytes
+        .ok_or_else(|| ApiError::bad_request("attach one audio file in the 'audio' field".to_string()))?;
+    let mime_type = mime_type.unwrap_or_else(|| "audio/webm".to_string());
+    let file_name = inferred_audio_file_name(file_name.as_deref(), &mime_type);
+
+    let whisper_config = {
+        let runtime = state.inner.read().await;
+        runtime.config.whisper.clone()
+    };
+    let transcript = whisper::transcribe_audio_bytes(
+        &state.http_client,
+        &whisper_config,
+        &file_name,
+        &mime_type,
+        audio_bytes,
+    )
+    .await
+    .map_err(map_audio_transcription_error)?;
+
+    let tenant = tenant_for_account(&state, &account).await?;
+    let result = companion::respond_to_user_message(
+        state.database.as_ref(),
+        &state.http_client,
+        &tenant,
+        &account,
+        &transcript,
+    )
+    .await?;
+    Ok(Json(ChatReplyEnvelope {
+        transcript: Some(transcript),
+        reply: result.reply,
+        suggest_new_session: result.suggest_new_session,
+        session_hint: result.session_hint,
+    }))
+}
+
+async fn start_new_chat(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<ChatReplyEnvelope>, ApiError> {
+    let account = require_auth(&state, &jar).await?;
+    let result = companion::start_new_conversation(state.database.as_ref(), &account)?;
+    Ok(Json(ChatReplyEnvelope {
+        transcript: None,
+        reply: result.reply,
+        suggest_new_session: result.suggest_new_session,
+        session_hint: result.session_hint,
+    }))
 }
 
 async fn reset_bot(
@@ -748,6 +904,16 @@ async fn require_admin(
     }
 }
 
+async fn tenant_for_account(
+    state: &AppState,
+    account: &AuthenticatedAccount,
+) -> Result<TenantRuntime, ApiError> {
+    state
+        .tenant(&account.tenant_id)
+        .await
+        .ok_or_else(|| ApiError::internal("tenant not found for account".to_string()))
+}
+
 fn issue_session(
     database: &AppDatabase,
     jar: CookieJar,
@@ -877,6 +1043,42 @@ fn normalize_optional_string(value: String) -> Option<String> {
     }
 }
 
+fn inferred_audio_file_name(original_name: Option<&str>, mime_type: &str) -> String {
+    if let Some(name) = original_name.map(str::trim).filter(|name| !name.is_empty()) {
+        return name.to_string();
+    }
+
+    let extension = match mime_type.trim().to_ascii_lowercase().as_str() {
+        "audio/webm" | "audio/webm;codecs=opus" => "webm",
+        "audio/ogg" | "audio/ogg;codecs=opus" => "ogg",
+        "audio/mp4" | "audio/aac" | "audio/x-m4a" => "m4a",
+        "audio/mpeg" => "mp3",
+        "audio/wav" | "audio/x-wav" | "audio/wave" => "wav",
+        _ => "webm",
+    };
+
+    format!("voice-note.{extension}")
+}
+
+fn map_audio_transcription_error(error: AppError) -> ApiError {
+    match error {
+        AppError::InvalidState(message)
+            if message.contains("whisper worker transcription failed")
+                || message.contains("whisper worker returned an empty transcription") =>
+        {
+            ApiError::bad_request(
+                "I couldn't transcribe that voice note right now. Please make sure your whisper.cpp server is running and that `whisper.worker_url` points to it, then try again."
+                    .to_string(),
+            )
+        }
+        AppError::HttpClient(_) => ApiError::bad_request(
+            "I couldn't reach the whisper.cpp worker right now. Please check that it is running and try again."
+                .to_string(),
+        ),
+        other => other.into(),
+    }
+}
+
 fn configured_admin_emails() -> HashSet<String> {
     env::var("WELLBEING_ADMIN_EMAILS")
         .unwrap_or_default()
@@ -900,6 +1102,26 @@ fn resolve_requested_tenant(
         .contains_key(tenant_id)
         .then(|| tenant_id.to_string())
         .ok_or_else(|| ApiError::bad_request(format!("tenant '{tenant_id}' was not found")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inferred_audio_file_name;
+
+    #[test]
+    fn infers_audio_extension_from_mime_type() {
+        assert_eq!(inferred_audio_file_name(None, "audio/webm"), "voice-note.webm");
+        assert_eq!(inferred_audio_file_name(None, "audio/ogg;codecs=opus"), "voice-note.ogg");
+        assert_eq!(inferred_audio_file_name(None, "audio/x-wav"), "voice-note.wav");
+    }
+
+    #[test]
+    fn keeps_uploaded_audio_filename_when_present() {
+        assert_eq!(
+            inferred_audio_file_name(Some("clip.m4a"), "audio/mp4"),
+            "clip.m4a"
+        );
+    }
 }
 
 fn render_admin_html(tenants: &[TenantSummary], admin_email: &str) -> String {

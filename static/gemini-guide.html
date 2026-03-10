@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gemini reference — Wellbeing</title>
-  <meta name="description" content="How to get a Gemini API key, what the preset models do, and what to understand about Google's data handling before you enable one." />
+  <title>Gemini setup guide — Wellbeing</title>
+  <meta name="description" content="How to create a Google AI Studio project, generate a Gemini API key, and paste it into Wellbeing." />
   <link rel="stylesheet" href="/css/style.css" />
   <style>
     .guide-steps {
@@ -33,38 +33,48 @@
       background: var(--primary);
       flex-shrink: 0;
     }
-    .guide-step strong { display: block; margin-bottom: 2px; font-weight: 500; }
-    .guide-step p { margin: 0; font-size: 0.9rem; color: var(--text-secondary); }
+    .guide-step strong { display: block; margin-bottom: 2px; font-weight: 600; }
+    .guide-step p { margin: 0; font-size: 0.92rem; color: var(--text-secondary); }
 
     .guide-links { display: flex; flex-direction: column; gap: var(--space-sm); }
     .guide-links a {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0.7rem 1rem;
+      padding: 0.8rem 1rem;
       border-radius: var(--radius-md);
       border: 1px solid var(--border);
-      font-size: 0.9rem;
+      font-size: 0.92rem;
       color: var(--text);
       text-decoration: none;
       transition: border-color var(--duration) var(--ease), background var(--duration) var(--ease);
     }
     .guide-links a:hover { border-color: var(--primary-soft); background: var(--primary-faint); }
 
-    .notice {
-      border-left: 4px solid var(--danger);
-      background: var(--danger-soft);
+    .notice,
+    .card-note {
       border-radius: var(--radius-md);
       padding: var(--space-lg);
     }
-    .notice strong { display: block; margin-bottom: var(--space-xs); color: var(--danger); }
-    .notice p { margin: 0; font-size: 0.9rem; color: var(--text-secondary); }
-    .notice p + p { margin-top: var(--space-sm); }
-
-    .model-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-    .model-table th { text-align: left; font-weight: 500; color: var(--text-secondary); padding: var(--space-sm) var(--space-md); border-bottom: 1.5px solid var(--border); }
-    .model-table td { padding: var(--space-sm) var(--space-md); border-bottom: 1px solid var(--border-light); color: var(--text); vertical-align: top; }
-    .model-table code { font-size: 0.85rem; background: var(--bg-warm); padding: 0.15em 0.4em; border-radius: 4px; }
+    .notice {
+      border-left: 4px solid var(--danger);
+      background: var(--danger-soft);
+    }
+    .notice strong,
+    .card-note strong { display: block; margin-bottom: var(--space-xs); }
+    .notice strong { color: var(--danger); }
+    .notice p,
+    .card-note p {
+      margin: 0;
+      font-size: 0.92rem;
+      color: var(--text-secondary);
+    }
+    .notice p + p,
+    .card-note p + p { margin-top: var(--space-sm); }
+    .card-note {
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
   </style>
 </head>
 <body>
@@ -82,102 +92,93 @@
   </header>
 
   <main style="padding: var(--space-2xl) var(--space-lg); min-height: calc(100vh - 53px);">
-    <div style="max-width: 640px; margin: 0 auto;">
+    <div style="max-width: 700px; margin: 0 auto;">
 
-      <h1 style="font-size: 1.6rem; margin-bottom: var(--space-xs);">Gemini API key reference</h1>
+      <h1 style="font-size: 1.7rem; margin-bottom: var(--space-xs);">Gemini API key setup</h1>
       <p class="text-secondary" style="margin-bottom: var(--space-2xl);">
-        This page explains how to obtain a Gemini API key, what the preset models are generally suited for,
-        and what it means for your data when you choose to use one.
+        This guide shows you how to create a project in Google AI Studio, generate an API key,
+        and paste that key into Wellbeing. You only provide the key — Wellbeing chooses the Gemini model for you.
       </p>
 
-      <!-- Privacy / data notice — first, so it's read before setup -->
       <section class="notice" style="margin-bottom: var(--space-2xl);">
-        <strong>Understand before you enable</strong>
+        <strong>Important privacy note</strong>
         <p>
-          When you add a personal Gemini key, Wellbeing sends your chat messages directly to
-          Google's Gemini API using that key. From that point Google — not Wellbeing — receives,
-          processes, and may retain the content of those requests.
+          When you add a personal Gemini key, Wellbeing sends your messages to Google's Gemini API using that key.
+          Google — not Wellbeing — receives and processes those requests.
         </p>
         <p>
           Google's own
           <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">API terms</a>,
           <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">privacy policy</a>,
-          and data-retention rules govern what happens to that data.
-          We have no control over Google's logging, storage, review, or training practices,
-          and we are not responsible for how Google processes what you send through its service.
-        </p>
-        <p>
-          Review Google's current policies yourself before enabling a key. Those policies can change at any time.
+          and data-handling rules apply. We do not control Google's retention, review, or policy changes.
         </p>
       </section>
 
-      <!-- How to get a key -->
       <section style="margin-bottom: var(--space-2xl);">
-        <h2 style="font-size: 1.3rem; margin-bottom: var(--space-lg);">How to get a key</h2>
+        <h2 style="font-size: 1.3rem; margin-bottom: var(--space-lg);">Step-by-step setup</h2>
         <div class="guide-steps">
           <div class="guide-step">
             <div>
               <strong>Open Google AI Studio</strong>
-              <p>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com</a> and sign in with the Google account you want associated with the key.</p>
+              <p>Go to <a href="https://aistudio.google.com/" target="_blank" rel="noopener">aistudio.google.com</a> and sign in with the Google account you want to use for the API key.</p>
             </div>
           </div>
+
           <div class="guide-step">
             <div>
-              <strong>Create an API key</strong>
-              <p>Use the API-key screen to generate a new key, then copy it. It will typically start with <code>AIza…</code>.</p>
+              <strong>Create or select a project</strong>
+              <p>Open the project switcher in AI Studio and create a new project if you do not already have one. The Gemini API key will belong to that project and its quotas.</p>
             </div>
           </div>
+
           <div class="guide-step">
             <div>
-              <strong>Paste it into Wellbeing</strong>
-              <p>In <a href="/onboarding.html">onboarding</a> or <a href="/settings.html">settings</a>, check "Use my own Gemini API key", choose a model preset, paste the key, and save.</p>
+              <strong>Open the API key page</strong>
+              <p>Go to the AI Studio API-key page for your selected project. If AI Studio asks you to enable billing or confirm project access, complete those steps first.</p>
+            </div>
+          </div>
+
+          <div class="guide-step">
+            <div>
+              <strong>Create a Gemini API key</strong>
+              <p>Click the button to create a key, then copy it immediately. Gemini API keys usually begin with <code>AIza</code>.</p>
+            </div>
+          </div>
+
+          <div class="guide-step">
+            <div>
+              <strong>Paste the key into Wellbeing</strong>
+              <p>Go back to <a href="/onboarding.html">onboarding</a> or <a href="/settings.html">settings</a>, paste the key, and save. Wellbeing stores it encrypted and chooses the model automatically.</p>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- Model presets -->
       <section style="margin-bottom: var(--space-2xl);">
-        <h2 style="font-size: 1.3rem; margin-bottom: var(--space-sm);">Preset models</h2>
-        <p class="text-secondary" style="margin-bottom: var(--space-lg);">
-          These are the models available in the preset dropdown. The descriptions below are general guidance, not guarantees — actual behavior depends on Google's current model versions.
-        </p>
-        <div class="card">
-          <table class="model-table">
-            <thead>
-              <tr>
-                <th>Preset</th>
-                <th>General character</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>gemini-2.5-flash</code></td>
-                <td>Fast and broadly capable. Typically the most practical default — reasonable quality with lower quota usage.</td>
-              </tr>
-              <tr>
-                <td><code>gemini-2.5-pro</code></td>
-                <td>Tends toward longer, more nuanced responses. Uses more quota per request and may respond more slowly.</td>
-              </tr>
-              <tr>
-                <td><code>gemini-2.0-flash</code></td>
-                <td>A lighter, older model. Useful if you want minimal quota consumption and don't need the latest capabilities.</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="card-note">
+          <strong>What you provide vs what Wellbeing decides</strong>
+          <p>You provide only the Gemini API key.</p>
+          <p>Wellbeing decides which Gemini model to use for your companion so we can keep the setup simple and avoid model-picker confusion.</p>
         </div>
       </section>
 
-      <!-- External links -->
       <section style="margin-bottom: var(--space-2xl);">
-        <h2 style="font-size: 1.3rem; margin-bottom: var(--space-lg);">Google's own documentation</h2>
+        <h2 style="font-size: 1.3rem; margin-bottom: var(--space-lg);">Helpful Google links</h2>
         <div class="guide-links">
+          <a href="https://aistudio.google.com/" target="_blank" rel="noopener">
+            <span>Google AI Studio</span>
+            <span aria-hidden="true">↗</span>
+          </a>
           <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">
-            <span>Google AI Studio — API key page</span>
+            <span>AI Studio API key page</span>
             <span aria-hidden="true">↗</span>
           </a>
           <a href="https://ai.google.dev/gemini-api/docs/api-key" target="_blank" rel="noopener">
             <span>Gemini API key documentation</span>
+            <span aria-hidden="true">↗</span>
+          </a>
+          <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener">
+            <span>Gemini API rate limits</span>
             <span aria-hidden="true">↗</span>
           </a>
           <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">
@@ -191,10 +192,9 @@
         </div>
       </section>
 
-      <p class="text-secondary" style="font-size: 0.85rem;">
+      <p class="text-secondary" style="font-size: 0.86rem;">
         ← <a href="/settings.html">Back to settings</a>
       </p>
-
     </div>
   </main>
 

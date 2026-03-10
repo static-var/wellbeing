@@ -6,24 +6,6 @@ const App = (() => {
     tenants: []
   };
 
-  const GEMINI_MODEL_OPTIONS = [
-    {
-      value: 'gemini-2.5-flash',
-      label: 'Gemini 2.5 Flash — balanced default',
-      help: 'Best default for everyday supportive chat. Fast, capable, and usually gentler on quota than a heavier model.'
-    },
-    {
-      value: 'gemini-2.5-pro',
-      label: 'Gemini 2.5 Pro — strongest but heaviest',
-      help: 'Usually the most capable preset here, but it will likely consume quota faster and may respond more slowly.'
-    },
-    {
-      value: 'gemini-2.0-flash',
-      label: 'Gemini 2.0 Flash — lighter/quota-friendly',
-      help: 'A lighter preset for quick check-ins and lower quota pressure when you want something cheaper to run.'
-    }
-  ];
-
   function $(sel, ctx = document) {
     return ctx.querySelector(sel);
   }
@@ -55,7 +37,8 @@ const App = (() => {
 
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
-    if (options.body && !headers.has('Content-Type')) {
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    if (options.body && !isFormData && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
     }
 
@@ -283,46 +266,6 @@ const App = (() => {
     });
   }
 
-  function populateGeminiModelSelects() {
-    $$('[data-gemini-model-select]').forEach((select) => {
-      if (select.dataset.populated === 'true') return;
-
-      const selected = select.dataset.selectedModel || select.value || GEMINI_MODEL_OPTIONS[0].value;
-      select.innerHTML = '';
-
-      GEMINI_MODEL_OPTIONS.forEach((model) => {
-        const option = document.createElement('option');
-        option.value = model.value;
-        option.textContent = model.label;
-        option.selected = model.value === selected;
-        select.appendChild(option);
-      });
-
-      if (![...select.options].some((option) => option.value === selected) && selected) {
-        const customOption = document.createElement('option');
-        customOption.value = selected;
-        customOption.textContent = `${selected} — saved custom model`;
-        customOption.selected = true;
-        select.prepend(customOption);
-      }
-
-      select.dataset.populated = 'true';
-      updateGeminiModelHelp(select);
-      on(select, 'change', () => updateGeminiModelHelp(select));
-    });
-  }
-
-  function updateGeminiModelHelp(select) {
-    const container = select.closest('.form-group');
-    const helper = $('[data-gemini-model-help]', container);
-    if (!helper) return;
-
-    const match = GEMINI_MODEL_OPTIONS.find((model) => model.value === select.value);
-    helper.textContent = match
-      ? match.help
-      : 'Saved custom model name. If Google retires or renames it later, switch back to one of the presets above.';
-  }
-
   function checkinTimeToClock(label) {
     switch (label) {
       case 'morning': return '09:00';
@@ -353,7 +296,6 @@ const App = (() => {
     const data = Object.fromEntries(new FormData(form).entries());
     const frequency = data.checkin_frequency || 'never';
     const checkinsEnabled = frequency !== 'never';
-    const personalInferenceEnabled = Boolean($('[name="personal_inference_enabled"]', form)?.checked);
 
     return {
       companion_name: data.bot_name || 'Hope',
@@ -367,14 +309,10 @@ const App = (() => {
       checkin_frequency: optionalValue(frequency),
       checkin_style: optionalValue(data.checkin_style),
       telegram_bot_token: optionalValue(data.telegram_token),
-      telegram_bot_username: optionalValue(data.telegram_username),
-      personal_inference_enabled: personalInferenceEnabled,
-      personal_inference_model: personalInferenceEnabled
-        ? (optionalValue(data.personal_inference_model) || GEMINI_MODEL_OPTIONS[0].value)
-        : null,
-      personal_inference_api_key: personalInferenceEnabled
-        ? optionalValue(data.personal_inference_api_key)
-        : null,
+      telegram_bot_username: null,
+      personal_inference_enabled: true,
+      personal_inference_model: null,
+      personal_inference_api_key: optionalValue(data.personal_inference_api_key),
       onboarding_complete: true,
       checkins_enabled: checkinsEnabled,
       timezone: optionalValue(data.timezone) || browserTimezone(),
@@ -402,12 +340,6 @@ const App = (() => {
     setValue(form, 'checkin_style', profile.checkin_style || 'mixed');
     setValue(form, 'timezone', profile.timezone || browserTimezone());
     setValue(form, 'telegram_token', profile.telegram_bot_token);
-    setValue(form, 'telegram_username', profile.telegram_bot_username);
-    setValue(form, 'personal_inference_model', profile.personal_inference_model || GEMINI_MODEL_OPTIONS[0].value);
-    const inferenceToggle = $('[name="personal_inference_enabled"]', form);
-    if (inferenceToggle) {
-      inferenceToggle.checked = Boolean(profile.personal_inference_enabled);
-    }
     const keyField = $('[name="personal_inference_api_key"]', form);
     if (keyField) {
       keyField.value = '';
@@ -422,33 +354,52 @@ const App = (() => {
   }
 
   function updatePersonalInferenceStatus(form, profile = {}) {
-    const enabled = Boolean($('[name="personal_inference_enabled"]', form)?.checked);
     const configured = Boolean(profile.personal_inference_api_key_configured);
-    const modelInput = $('[name="personal_inference_model"]', form);
     const keyInput = $('[name="personal_inference_api_key"]', form);
     const status = $('[data-personal-key-status]', form);
-
-    [modelInput, keyInput].forEach((input) => {
-      if (input) input.disabled = !enabled;
-    });
+    if (keyInput) keyInput.required = !configured;
 
     if (!status) return;
-    if (!enabled) {
-      status.textContent = 'Leave this off only if this companion already has a shared Gemini key configured by the operator.';
-      return;
-    }
-
     status.textContent = configured
-      ? 'A Gemini key is already stored securely. Leave the key field blank to keep it, or paste a new one to rotate it.'
-      : 'If you add a Gemini key, it will be encrypted before it is stored.';
+      ? 'A Gemini key is already stored securely. Leave this blank to keep it, or paste a new one to rotate it.'
+      : 'A Gemini key is required. It will be encrypted before it is stored.';
   }
 
   function initPersonalInferenceControls(form, profile = {}) {
-    const toggle = $('[name="personal_inference_enabled"]', form);
-    if (!toggle) return;
-    updateGeminiModelHelp($('[name="personal_inference_model"]', form));
     updatePersonalInferenceStatus(form, profile);
-    on(toggle, 'change', () => updatePersonalInferenceStatus(form, profile));
+  }
+
+  function setFormStatus(form, kind, message) {
+    const status = $('[data-form-status]', form);
+    if (!status) return;
+    status.hidden = false;
+    status.className = `form-status form-status--${kind}`;
+    status.textContent = message;
+  }
+
+  function clearFormStatus(form) {
+    const status = $('[data-form-status]', form);
+    if (!status) return;
+    status.hidden = true;
+    status.className = 'form-status';
+    status.textContent = '';
+  }
+
+  function setSubmitting(form, submitting, pendingLabel) {
+    const submit = $('[type="submit"]', form);
+    if (!submit) return;
+    if (!submit.dataset.defaultLabel) {
+      submit.dataset.defaultLabel = submit.textContent;
+    }
+    submit.disabled = submitting;
+    submit.textContent = submitting ? pendingLabel : submit.dataset.defaultLabel;
+  }
+
+  function friendlySaveError(message) {
+    if (message.includes('WELLBEING_MASTER_KEY')) {
+      return 'This server is not configured to store Gemini keys yet. Set WELLBEING_MASTER_KEY on the server, restart Wellbeing, then save again.';
+    }
+    return message;
   }
 
   async function requireSession(options = {}) {
@@ -534,6 +485,8 @@ const App = (() => {
 
     on(form, 'submit', async (event) => {
       event.preventDefault();
+      clearFormStatus(form);
+      setSubmitting(form, true, 'Saving...');
       try {
         const profile = await api('/api/me/profile', {
           method: 'PUT',
@@ -541,10 +494,15 @@ const App = (() => {
         });
         state.account.profile = profile.profile;
         rememberTenantId(state.account.tenant_id);
+        setFormStatus(form, 'success', 'Saved. Taking you to chat…');
         toast('You’re all set');
         window.location.href = '/chat.html';
       } catch (error) {
-        toast(error.message);
+        const message = friendlySaveError(error.message);
+        setFormStatus(form, 'error', message);
+        toast(message, 5200);
+      } finally {
+        setSubmitting(form, false, 'Saving...');
       }
     });
   }
@@ -560,6 +518,8 @@ const App = (() => {
 
     on(form, 'submit', async (event) => {
       event.preventDefault();
+      clearFormStatus(form);
+      setSubmitting(form, true, 'Saving...');
       try {
         const profile = await api('/api/me/profile', {
           method: 'PUT',
@@ -569,9 +529,14 @@ const App = (() => {
         fillProfileForm(form, profile.profile);
         initPersonalInferenceControls(form, profile.profile);
         applyAccountChrome(state.account);
+        setFormStatus(form, 'success', 'Settings saved successfully.');
         toast('Settings saved');
       } catch (error) {
-        toast(error.message);
+        const message = friendlySaveError(error.message);
+        setFormStatus(form, 'error', message);
+        toast(message, 5200);
+      } finally {
+        setSubmitting(form, false, 'Saving...');
       }
     });
   }
@@ -580,6 +545,11 @@ const App = (() => {
     const form = $('#chat-form');
     const input = $('#chat-input');
     const log = $('#chat-messages');
+    const newSessionButton = $('#chat-new-session');
+    const sessionNote = $('#chat-session-note');
+    const recordButton = $('#chat-record');
+    const audioStatus = $('#chat-audio-status');
+    const sendButton = $('.chat-send', form);
     if (!form || !input || !log) return;
 
     const account = await requireSession();
@@ -592,9 +562,70 @@ const App = (() => {
     const inner = $('.chat-messages-inner', log) || log;
     const companionName = account.profile.companion_name || 'Hope';
     const userName = account.profile.user_name || 'You';
+    const supportsAudioRecording = Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
+    let isSending = false;
+    let isRecording = false;
+    let mediaRecorder = null;
+    let mediaStream = null;
+    let audioChunks = [];
+    let autoStopTimer = null;
 
     function scrollToBottom() {
       log.scrollTop = log.scrollHeight;
+    }
+
+    function clearMessages() {
+      inner.innerHTML = '';
+    }
+
+    function setSessionHint(text) {
+      if (!sessionNote) return;
+      const value = optionalValue(text);
+      if (!value) {
+        sessionNote.hidden = true;
+        sessionNote.textContent = '';
+        return;
+      }
+      sessionNote.textContent = value;
+      sessionNote.hidden = false;
+    }
+
+    function setAudioStatus(message, stateName = 'idle') {
+      if (!audioStatus) return;
+      audioStatus.textContent = message;
+      if (stateName === 'idle') {
+        audioStatus.removeAttribute('data-state');
+      } else {
+        audioStatus.dataset.state = stateName;
+      }
+    }
+
+    function clearAutoStopTimer() {
+      if (autoStopTimer) {
+        window.clearTimeout(autoStopTimer);
+        autoStopTimer = null;
+      }
+    }
+
+    function stopMediaStream() {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+      }
+    }
+
+    function refreshComposerState() {
+      const busy = isSending || isRecording;
+      input.disabled = busy;
+      if (sendButton) sendButton.disabled = busy;
+      if (recordButton) {
+        recordButton.disabled = isSending || !supportsAudioRecording;
+        recordButton.classList.toggle('is-recording', isRecording);
+        recordButton.setAttribute(
+          'aria-label',
+          isRecording ? 'Stop recording and send voice note' : 'Record a voice note'
+        );
+      }
     }
 
     function renderMessage(text, sender, createdAt) {
@@ -603,13 +634,16 @@ const App = (() => {
       const initials = sender === 'assistant'
         ? companionName.charAt(0).toUpperCase()
         : userName.charAt(0).toUpperCase();
+      const content = sender === 'assistant'
+        ? renderAssistantMarkdown(text)
+        : escapeHtml(text);
       const timeLabel = createdAt
         ? new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       msg.innerHTML = `
         <div class="message-avatar" aria-hidden="true">${escapeHtml(initials)}</div>
         <div>
-          <div class="message-bubble">${escapeHtml(text)}</div>
+          <div class="message-bubble">${content}</div>
           <div class="message-time">${timeLabel}</div>
         </div>`;
       inner.appendChild(msg);
@@ -638,7 +672,156 @@ const App = (() => {
       input.style.height = Math.min(input.scrollHeight, 120) + 'px';
     }
 
+    function preferredRecordingMimeType() {
+      if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+        return '';
+      }
+
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4'
+      ];
+      return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || '';
+    }
+
+    function recordedFileName(mimeType) {
+      const normalized = String(mimeType || '').toLowerCase();
+      if (normalized.includes('ogg')) return 'voice-note.ogg';
+      if (normalized.includes('mp4') || normalized.includes('aac') || normalized.includes('m4a')) return 'voice-note.m4a';
+      return 'voice-note.webm';
+    }
+
+    function friendlyMicError(error) {
+      if (!error) return 'I could not access your microphone.';
+      if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+        return 'Microphone permission was denied. Allow microphone access in your browser and try again.';
+      }
+      if (error.name === 'NotFoundError') {
+        return 'No microphone was found on this device.';
+      }
+      if (error.name === 'NotReadableError') {
+        return 'Your microphone is busy in another app right now. Please close that app and try again.';
+      }
+      return 'I could not start recording from your microphone.';
+    }
+
+    async function uploadAudioNote(blob, mimeType) {
+      const formData = new FormData();
+      formData.append('audio', blob, recordedFileName(mimeType));
+      isSending = true;
+      refreshComposerState();
+      setAudioStatus('Transcribing your voice note…', 'success');
+      showTyping();
+
+      try {
+        const response = await api('/api/chat/audio', {
+          method: 'POST',
+          body: formData
+        });
+        hideTyping();
+        setSessionHint(response.session_hint);
+        if (response.transcript) {
+          renderMessage(response.transcript, 'user');
+        }
+        renderMessage(response.reply.content, 'assistant', response.reply.created_at);
+        setAudioStatus('Voice note sent.', 'success');
+      } catch (error) {
+        hideTyping();
+        const message = error.message || 'I could not send that voice note.';
+        setAudioStatus(message, 'error');
+        toast(message, 5200);
+      } finally {
+        isSending = false;
+        refreshComposerState();
+      }
+    }
+
+    async function startRecording() {
+      if (!supportsAudioRecording) {
+        const message = 'This browser does not support in-browser voice notes yet.';
+        setAudioStatus(message, 'error');
+        toast(message);
+        return;
+      }
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeType = preferredRecordingMimeType();
+        mediaRecorder = mimeType
+          ? new MediaRecorder(mediaStream, { mimeType })
+          : new MediaRecorder(mediaStream);
+        audioChunks = [];
+
+        mediaRecorder.addEventListener('dataavailable', (event) => {
+          if (event.data && event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        });
+
+        mediaRecorder.addEventListener('stop', async () => {
+          clearAutoStopTimer();
+          stopMediaStream();
+          isRecording = false;
+          refreshComposerState();
+
+          if (!audioChunks.length) {
+            setAudioStatus('No audio was captured. Please try again.', 'error');
+            return;
+          }
+
+          const actualMimeType = mediaRecorder?.mimeType || mimeType || 'audio/webm';
+          const audioBlob = new Blob(audioChunks, { type: actualMimeType });
+          audioChunks = [];
+          await uploadAudioNote(audioBlob, actualMimeType);
+        });
+
+        mediaRecorder.addEventListener('error', () => {
+          clearAutoStopTimer();
+          stopMediaStream();
+          isRecording = false;
+          audioChunks = [];
+          refreshComposerState();
+          const message = 'Recording stopped unexpectedly. Please try again.';
+          setAudioStatus(message, 'error');
+          toast(message);
+        });
+
+        mediaRecorder.start();
+        isRecording = true;
+        refreshComposerState();
+        setAudioStatus('Recording… tap the mic again to send.', 'recording');
+        autoStopTimer = window.setTimeout(() => {
+          if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+          }
+        }, 90000);
+      } catch (error) {
+        stopMediaStream();
+        isRecording = false;
+        refreshComposerState();
+        const message = friendlyMicError(error);
+        setAudioStatus(message, 'error');
+        toast(message, 5200);
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        setAudioStatus('Finishing your voice note…', 'success');
+        mediaRecorder.stop();
+      }
+    }
+
     const history = await api('/api/chat/messages');
+    if (supportsAudioRecording) {
+      setAudioStatus('Voice notes are available here too. Tap the mic to record, then tap again to send.');
+    } else {
+      setAudioStatus('Voice notes are not available in this browser, but text chat still works normally.', 'error');
+    }
+    refreshComposerState();
+    setSessionHint(history.session_hint);
     if (history.messages.length === 0) {
       renderMessage(
         account.profile.user_name
@@ -652,21 +835,59 @@ const App = (() => {
       });
     }
 
+    async function createFreshChat() {
+      if (isSending || isRecording) return;
+      showTyping();
+      try {
+        const response = await api('/api/chat/new', { method: 'POST' });
+        hideTyping();
+        clearMessages();
+        setSessionHint(response.session_hint);
+        renderMessage(response.reply.content, 'assistant', response.reply.created_at);
+        toast('Started a fresh chat');
+        input.focus();
+      } catch (error) {
+        hideTyping();
+        toast(error.message);
+      }
+    }
+
     on(input, 'input', autoResize);
     on(input, 'keydown', (event) => {
+      if (isSending || isRecording) {
+        return;
+      }
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         form.requestSubmit();
       }
     });
 
+    on(recordButton, 'click', async () => {
+      if (isSending) return;
+      if (isRecording) {
+        stopRecording();
+      } else {
+        await startRecording();
+      }
+    });
+
     on(form, 'submit', async (event) => {
       event.preventDefault();
+      if (isSending || isRecording) return;
       const message = input.value.trim();
       if (!message) return;
+      if (message === '/new') {
+        input.value = '';
+        autoResize();
+        await createFreshChat();
+        return;
+      }
       renderMessage(message, 'user');
       input.value = '';
       autoResize();
+      isSending = true;
+      refreshComposerState();
       showTyping();
 
       try {
@@ -675,12 +896,18 @@ const App = (() => {
           body: JSON.stringify({ message })
         });
         hideTyping();
+        setSessionHint(response.session_hint);
         renderMessage(response.reply.content, 'assistant', response.reply.created_at);
       } catch (error) {
         hideTyping();
         toast(error.message);
+      } finally {
+        isSending = false;
+        refreshComposerState();
       }
     });
+
+    on(newSessionButton, 'click', createFreshChat);
   }
 
   async function initDangerActions() {
@@ -722,11 +949,71 @@ const App = (() => {
     return div.innerHTML;
   }
 
+  function sanitizeHref(url) {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.href;
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  function renderInlineMarkdown(text) {
+    let html = escapeHtml(text);
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/(^|[^\*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label, href) => {
+      const safeHref = sanitizeHref(href);
+      const safeLabel = label;
+      if (!safeHref) return safeLabel;
+      return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>`;
+    });
+    return html;
+  }
+
+  function renderAssistantMarkdown(text) {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!normalized) return '';
+
+    const blocks = normalized.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+    const htmlBlocks = blocks.map((block) => {
+      const lines = block.split('\n').map((line) => line.trim()).filter(Boolean);
+      if (!lines.length) return '';
+
+      if (lines.every((line) => /^[-*]\s+/.test(line))) {
+        const items = lines
+          .map((line) => `<li>${renderInlineMarkdown(line.replace(/^[-*]\s+/, ''))}</li>`)
+          .join('');
+        return `<ul>${items}</ul>`;
+      }
+
+      if (lines.every((line) => /^\d+\.\s+/.test(line))) {
+        const items = lines
+          .map((line) => `<li>${renderInlineMarkdown(line.replace(/^\d+\.\s+/, ''))}</li>`)
+          .join('');
+        return `<ol>${items}</ol>`;
+      }
+
+      const headingMatch = lines.length === 1 ? lines[0].match(/^(#{1,3})\s+(.+)$/) : null;
+      if (headingMatch) {
+        const level = Math.min(headingMatch[1].length + 2, 4);
+        return `<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`;
+      }
+
+      return `<p>${lines.map(renderInlineMarkdown).join('<br>')}</p>`;
+    }).filter(Boolean);
+
+    return htmlBlocks.join('');
+  }
+
   async function init() {
     await initTenantSelectors();
     syncTenantLinks();
     populateTimezoneSelects();
-    populateGeminiModelSelects();
     $$('.tabs').forEach((tabs) => initTabs(tabs.parentElement));
     initModals();
     await initLoginForm();

@@ -66,6 +66,19 @@ pub struct ChatMessageRecord {
     pub created_at: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct MemoryItemRecord {
+    pub kind: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct SessionMetrics {
+    pub message_count: usize,
+    pub started_at: Option<String>,
+    pub last_message_at: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct UpsertProfileInput {
     pub companion_name: String,
@@ -426,6 +439,13 @@ impl AppDatabase {
             SELECT role, content, created_at
             FROM chat_messages
             WHERE account_id = ?1
+              AND id > COALESCE((
+                    SELECT MAX(id)
+                    FROM chat_messages
+                    WHERE account_id = ?1
+                      AND role = 'session_reset'
+                ), 0)
+              AND role != 'session_reset'
             ORDER BY id DESC
             LIMIT ?2
             "#,
@@ -445,6 +465,37 @@ impl AppDatabase {
         }
         messages.reverse();
         Ok(messages)
+    }
+
+    pub fn current_session_metrics(&self, account_id: i64) -> Result<SessionMetrics> {
+        let connection = self.connect()?;
+        connection
+            .query_row(
+                r#"
+                SELECT
+                    COUNT(*) AS message_count,
+                    MIN(created_at) AS started_at,
+                    MAX(created_at) AS last_message_at
+                FROM chat_messages
+                WHERE account_id = ?1
+                  AND id > COALESCE((
+                        SELECT MAX(id)
+                        FROM chat_messages
+                        WHERE account_id = ?1
+                          AND role = 'session_reset'
+                    ), 0)
+                  AND role != 'session_reset'
+                "#,
+                params![account_id],
+                |row| {
+                    Ok(SessionMetrics {
+                        message_count: row.get::<_, i64>(0)? as usize,
+                        started_at: row.get(1)?,
+                        last_message_at: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
     }
 
     pub fn latest_memory_summary(&self, account_id: i64) -> Result<Option<String>> {
@@ -475,6 +526,79 @@ impl AppDatabase {
             params![account_id, summary.trim(), Utc::now().to_rfc3339()],
         )?;
         Ok(())
+    }
+
+    pub fn replace_memory_items(
+        &self,
+        account_id: i64,
+        kind: &str,
+        items: &[String],
+    ) -> Result<()> {
+        let connection = self.connect()?;
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute(
+            "DELETE FROM memory_items WHERE account_id = ?1 AND kind = ?2",
+            params![account_id, kind],
+        )?;
+
+        let now = Utc::now().to_rfc3339();
+        for item in items {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            transaction.execute(
+                r#"
+                INSERT INTO memory_items (account_id, kind, content, updated_at)
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![account_id, kind, trimmed, now],
+            )?;
+        }
+
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn list_memory_items(&self, account_id: i64, limit: usize) -> Result<Vec<MemoryItemRecord>> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT kind, content
+            FROM memory_items
+            WHERE account_id = ?1
+            ORDER BY
+                CASE kind
+                    WHEN 'identity' THEN 0
+                    WHEN 'goal' THEN 1
+                    WHEN 'boundary' THEN 2
+                    WHEN 'preference' THEN 3
+                    WHEN 'person' THEN 4
+                    WHEN 'relationship' THEN 5
+                    WHEN 'key_event' THEN 6
+                    WHEN 'recurring_theme' THEN 7
+                    WHEN 'session_summary' THEN 8
+                    ELSE 9
+                END,
+                updated_at DESC,
+                id DESC
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = statement.query_map(params![account_id, limit as i64], |row| {
+            Ok(MemoryItemRecord {
+                kind: row.get(0)?,
+                content: row.get(1)?,
+            })
+        })?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        Ok(items)
     }
 
     pub fn personal_inference_api_key(&self, account_id: i64) -> Result<Option<String>> {
@@ -524,11 +648,25 @@ impl AppDatabase {
         Ok(())
     }
 
+    pub fn start_new_session(&self, account_id: i64) -> Result<()> {
+        let connection = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            r#"
+            INSERT INTO chat_messages (account_id, role, content, created_at)
+            VALUES (?1, 'session_reset', 'Started a new conversation', ?2)
+            "#,
+            params![account_id, now],
+        )?;
+        Ok(())
+    }
+
     pub fn reset_companion(&self, account_id: i64) -> Result<()> {
         let connection = self.connect()?;
         let now = Utc::now().to_rfc3339();
         connection.execute("DELETE FROM chat_messages WHERE account_id = ?1", params![account_id])?;
         connection.execute("DELETE FROM memory_summaries WHERE account_id = ?1", params![account_id])?;
+        connection.execute("DELETE FROM memory_items WHERE account_id = ?1", params![account_id])?;
         connection.execute(
             r#"
             UPDATE profiles
@@ -577,6 +715,7 @@ impl AppDatabase {
         connection.execute("DELETE FROM profiles WHERE account_id = ?1", params![account_id])?;
         connection.execute("DELETE FROM chat_messages WHERE account_id = ?1", params![account_id])?;
         connection.execute("DELETE FROM memory_summaries WHERE account_id = ?1", params![account_id])?;
+        connection.execute("DELETE FROM memory_items WHERE account_id = ?1", params![account_id])?;
         connection.execute("DELETE FROM telegram_bindings WHERE account_id = ?1", params![account_id])?;
         Ok(())
     }
@@ -725,13 +864,16 @@ impl AppDatabase {
             SELECT a.id, a.tenant_id, p.telegram_bot_token
             FROM accounts a
             JOIN profiles p ON p.account_id = a.id
+            LEFT JOIN telegram_bot_state tbs ON tbs.bot_token = p.telegram_bot_token
             WHERE a.deleted_at IS NULL
               AND p.telegram_bot_token IS NOT NULL
               AND TRIM(p.telegram_bot_token) != ''
+              AND (tbs.suspended_until IS NULL OR tbs.suspended_until <= ?1)
             "#,
         )?;
 
-        let rows = statement.query_map([], |row| {
+        let now = Utc::now().to_rfc3339();
+        let rows = statement.query_map(params![now], |row| {
             Ok(TelegramBotRecord {
                 account_id: row.get(0)?,
                 tenant_id: row.get(1)?,
@@ -768,13 +910,80 @@ impl AppDatabase {
         let now = Utc::now().to_rfc3339();
         connection.execute(
             r#"
-            INSERT INTO telegram_bot_state (bot_token, next_update_id, updated_at)
-            VALUES (?1, ?2, ?3)
+            INSERT INTO telegram_bot_state (
+                bot_token,
+                next_update_id,
+                updated_at,
+                failure_count,
+                suspended_until,
+                last_error
+            )
+            VALUES (?1, ?2, ?3, 0, NULL, NULL)
             ON CONFLICT(bot_token) DO UPDATE SET
                 next_update_id = excluded.next_update_id,
                 updated_at = excluded.updated_at
             "#,
             params![bot_token, next_update_id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_telegram_poll_failure(
+        &self,
+        bot_token: &str,
+        suspended_until: Option<DateTime<Utc>>,
+        error_message: &str,
+    ) -> Result<()> {
+        let connection = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            r#"
+            INSERT INTO telegram_bot_state (
+                bot_token,
+                next_update_id,
+                updated_at,
+                failure_count,
+                suspended_until,
+                last_error
+            )
+            VALUES (?1, 0, ?2, 1, ?3, ?4)
+            ON CONFLICT(bot_token) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                failure_count = telegram_bot_state.failure_count + 1,
+                suspended_until = excluded.suspended_until,
+                last_error = excluded.last_error
+            "#,
+            params![
+                bot_token,
+                now,
+                suspended_until.map(|value| value.to_rfc3339()),
+                truncate_for_storage(error_message, 500)
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_telegram_poll_failure(&self, bot_token: &str) -> Result<()> {
+        let connection = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            r#"
+            INSERT INTO telegram_bot_state (
+                bot_token,
+                next_update_id,
+                updated_at,
+                failure_count,
+                suspended_until,
+                last_error
+            )
+            VALUES (?1, 0, ?2, 0, NULL, NULL)
+            ON CONFLICT(bot_token) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                failure_count = 0,
+                suspended_until = NULL,
+                last_error = NULL
+            "#,
+            params![bot_token, now],
         )?;
         Ok(())
     }
@@ -906,6 +1115,15 @@ impl AppDatabase {
                 FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS memory_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                content TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS telegram_bindings (
                 account_id INTEGER PRIMARY KEY,
                 bot_token TEXT NOT NULL,
@@ -922,12 +1140,16 @@ impl AppDatabase {
             CREATE TABLE IF NOT EXISTS telegram_bot_state (
                 bot_token TEXT PRIMARY KEY,
                 next_update_id INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                suspended_until TEXT,
+                last_error TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token_hash);
             CREATE INDEX IF NOT EXISTS idx_profiles_due_checkins ON profiles(checkins_enabled, next_checkin_at);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_account ON chat_messages(account_id, id);
+            CREATE INDEX IF NOT EXISTS idx_memory_items_account_kind ON memory_items(account_id, kind, id);
             CREATE INDEX IF NOT EXISTS idx_telegram_bindings_chat ON telegram_bindings(chat_id);
             "#,
         )?;
@@ -947,6 +1169,14 @@ impl AppDatabase {
             "personal_inference_api_key_encrypted",
             "TEXT",
         )?;
+        ensure_table_column(
+            &connection,
+            "telegram_bot_state",
+            "failure_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_table_column(&connection, "telegram_bot_state", "suspended_until", "TEXT")?;
+        ensure_table_column(&connection, "telegram_bot_state", "last_error", "TEXT")?;
         Ok(())
     }
 }
@@ -1036,4 +1266,26 @@ fn ensure_profile_column(connection: &Connection, column: &str, sql_type: &str) 
         }
         Err(error) => Err(error.into()),
     }
+}
+
+fn ensure_table_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    sql_type: &str,
+) -> Result<()> {
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}");
+    match connection.execute(&sql, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn truncate_for_storage(value: &str, max_len: usize) -> String {
+    value.chars().take(max_len).collect()
 }

@@ -128,26 +128,14 @@
         </section>
 
         <section class="settings-section" aria-labelledby="settings-inference">
-          <h2 id="settings-inference">Personal model settings</h2>
-          <p>Wellbeing uses Gemini's OpenAI-compatible endpoint only. Add your own Gemini API key here if the operator has not already provided a shared Gemini key for this companion.</p>
+          <h2 id="settings-inference">Gemini API key</h2>
+          <p>Wellbeing is BYOB. Each companion uses its own Gemini API key, and the app chooses the model automatically.</p>
           <div class="card">
-            <div class="form-group">
-              <label style="display:flex;align-items:center;gap:0.65rem;">
-                <input type="checkbox" id="s-personal_inference_enabled" name="personal_inference_enabled" />
-                Use my own Gemini API key
-              </label>
-              <p class="hint">Leave this off only if this companion already has a shared Gemini key configured by the operator.</p>
-            </div>
-            <div class="form-group">
-              <label for="s-personal_inference_model">Gemini model</label>
-              <select id="s-personal_inference_model" name="personal_inference_model" data-gemini-model-select></select>
-              <p class="hint" data-gemini-model-help></p>
-            </div>
             <div class="form-group" style="margin-bottom:0;">
               <label for="s-personal_inference_api_key">Gemini API key</label>
               <input type="password" id="s-personal_inference_api_key" name="personal_inference_api_key" placeholder="Paste a new Gemini key to save or rotate it" autocomplete="off" />
-              <p class="hint" data-personal-key-status>A saved key can stay in place even if you leave this field blank.</p>
-              <p class="hint">See the <a href="/gemini-guide.html" target="_blank" rel="noopener">Gemini reference</a> for setup steps and Google's data-handling details.</p>
+              <p class="hint" data-personal-key-status>A Gemini key is required. If one is already stored, you can leave this blank to keep it or paste a new one to rotate it.</p>
+              <p class="hint">See the <a href="/gemini-guide.html" target="_blank" rel="noopener">Gemini setup guide</a> for AI Studio project creation, API-key steps, and Google's data-handling details.</p>
             </div>
           </div>
         </section>
@@ -162,13 +150,8 @@
               <input type="text" id="s-telegram_token" name="telegram_token" placeholder="Paste your Telegram bot token" autocomplete="off" />
               <p class="hint">
                 Get one from <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>. 
-                Leave blank to use web chat only.
+                Leave blank to use web chat only. After saving, open the bot in Telegram and send <code>/start</code> once to link it.
               </p>
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-              <label for="s-telegram_username">Bot username</label>
-              <input type="text" id="s-telegram_username" name="telegram_username" placeholder="@your_companion_bot" autocomplete="off" />
-              <p class="hint">We store this alongside the token so the companion can be matched to the right Telegram bot later. After saving, send <code>/start</code> to the bot once from Telegram.</p>
             </div>
           </div>
         </section>
@@ -178,6 +161,7 @@
           <a href="/chat.html" class="btn btn--ghost">← Back to chat</a>
           <button type="submit" class="btn btn--primary">Save changes</button>
         </div>
+        <p class="form-status" data-form-status aria-live="polite" hidden></p>
       </form>
 
       <hr class="divider" style="margin:var(--space-2xl) 0;" />

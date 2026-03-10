@@ -71,6 +71,28 @@ impl TenantRuntime {
         }
     }
 
+    pub fn public_summary(&self) -> TenantSummary {
+        TenantSummary {
+            id: self.id.clone(),
+            display_name: self.display_name.clone(),
+            route: self.route.clone(),
+            memory_path: String::new(),
+            model_provider: String::new(),
+            model_base_url: String::new(),
+            model_name: String::new(),
+            model_api_key_env: None,
+            enabled_gateways: self
+                .gateways
+                .enabled_names()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            gentle_checkins_enabled: self.proactive.gentle_checkins_enabled,
+            persona_preview: String::new(),
+            bootstrap_preview: String::new(),
+        }
+    }
+
     pub fn update_model(&mut self, model: ModelConfig) {
         self.model = model;
     }
