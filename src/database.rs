@@ -550,6 +550,22 @@ impl AppDatabase {
         Ok(())
     }
 
+    pub fn disable_checkins(&self, account_id: i64) -> Result<()> {
+        let connection = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            r#"
+            UPDATE profiles
+            SET checkins_enabled = 0,
+                next_checkin_at = NULL,
+                updated_at = ?1
+            WHERE account_id = ?2
+            "#,
+            params![now, account_id],
+        )?;
+        Ok(())
+    }
+
     fn connect(&self) -> Result<Connection> {
         let connection = Connection::open(&self.path)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;

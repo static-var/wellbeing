@@ -153,6 +153,53 @@ const App = (() => {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   }
 
+  function supportedTimezones() {
+    if (typeof Intl.supportedValuesOf === 'function') {
+      return Intl.supportedValuesOf('timeZone');
+    }
+
+    const fallback = ['UTC'];
+    const browser = browserTimezone();
+    if (!fallback.includes(browser)) {
+      fallback.push(browser);
+    }
+    return fallback;
+  }
+
+  function formatTimezoneLabel(timezone) {
+    return timezone.replaceAll('_', ' ');
+  }
+
+  function populateTimezoneSelects() {
+    const timezones = supportedTimezones();
+    $$('[data-timezone-select]').forEach((select) => {
+      if (select.dataset.populated === 'true') return;
+
+      const selected = select.dataset.selectedTimezone || select.value || browserTimezone();
+      select.innerHTML = '';
+
+      timezones.forEach((timezone) => {
+        const option = document.createElement('option');
+        option.value = timezone;
+        option.textContent = formatTimezoneLabel(timezone);
+        if (timezone === selected) {
+          option.selected = true;
+        }
+        select.appendChild(option);
+      });
+
+      if (![...select.options].some((option) => option.value === selected)) {
+        const option = document.createElement('option');
+        option.value = selected;
+        option.textContent = formatTimezoneLabel(selected);
+        option.selected = true;
+        select.prepend(option);
+      }
+
+      select.dataset.populated = 'true';
+    });
+  }
+
   function checkinTimeToClock(label) {
     switch (label) {
       case 'morning': return '09:00';
@@ -199,7 +246,7 @@ const App = (() => {
       telegram_bot_username: optionalValue(data.telegram_username),
       onboarding_complete: true,
       checkins_enabled: checkinsEnabled,
-      timezone: browserTimezone(),
+      timezone: optionalValue(data.timezone) || browserTimezone(),
       checkin_local_time: checkinTimeToClock(data.checkin_time || 'evening'),
       checkin_days: frequencyToDays(frequency),
       quiet_hours: ['22:00-07:00']
@@ -222,6 +269,7 @@ const App = (() => {
     setValue(form, 'checkin_frequency', profile.checkin_frequency || (profile.checkins_enabled ? 'daily' : 'never'));
     setValue(form, 'checkin_time', localTimeToLabel(profile.checkin_local_time || '19:00'));
     setValue(form, 'checkin_style', profile.checkin_style || 'mixed');
+    setValue(form, 'timezone', profile.timezone || browserTimezone());
     setValue(form, 'telegram_token', profile.telegram_bot_token);
     setValue(form, 'telegram_username', profile.telegram_bot_username);
   }
@@ -495,6 +543,7 @@ const App = (() => {
   }
 
   async function init() {
+    populateTimezoneSelects();
     $$('.tabs').forEach((tabs) => initTabs(tabs.parentElement));
     initModals();
     await initLoginForm();

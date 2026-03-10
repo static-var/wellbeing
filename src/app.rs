@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
+use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr, sync::Arc};
 
 use axum::{
     extract::{Path as AxumPath, State},
@@ -8,7 +8,8 @@ use axum::{
     Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use chrono::{Duration, Utc};
+use chrono::{Duration, NaiveTime, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use tokio::{fs, sync::RwLock};
 
@@ -343,6 +344,13 @@ async fn update_profile(
 ) -> Result<Json<ProfileEnvelope>, ApiError> {
     let account = require_auth(&state, &jar).await?;
 
+    validate_profile_request(&request)?;
+
+    let profile = state.database.update_profile(account.id, &request)?;
+    Ok(Json(ProfileEnvelope { profile }))
+}
+
+fn validate_profile_request(request: &UpsertProfileInput) -> Result<(), ApiError> {
     if request.companion_name.trim().is_empty() {
         return Err(ApiError::bad_request(
             "companion_name must not be empty".to_string(),
@@ -353,9 +361,14 @@ async fn update_profile(
             "timezone and checkin_local_time are required".to_string(),
         ));
     }
+    Tz::from_str(request.timezone.trim()).map_err(|_| {
+        ApiError::bad_request("timezone must be a valid IANA timezone".to_string())
+    })?;
+    NaiveTime::parse_from_str(request.checkin_local_time.trim(), "%H:%M").map_err(|_| {
+        ApiError::bad_request("checkin_local_time must use HH:MM format".to_string())
+    })?;
 
-    let profile = state.database.update_profile(account.id, &request)?;
-    Ok(Json(ProfileEnvelope { profile }))
+    Ok(())
 }
 
 async fn list_messages(
