@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fs as stdfs,
     path::{Path, PathBuf},
@@ -10,7 +10,7 @@ use std::{
 use axum::{
     extract::{Path as AxumPath, State},
     http::{header, HeaderValue, StatusCode},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -515,7 +515,18 @@ async fn delete_account(
     Ok((jar.remove(expired_session_cookie()), StatusCode::NO_CONTENT))
 }
 
-async fn admin_portal(State(state): State<AppState>) -> Html<String> {
+async fn admin_portal(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Response, ApiError> {
+    let admin = match require_admin(&state, &jar).await {
+        Ok(account) => account,
+        Err(error) if error.status == StatusCode::UNAUTHORIZED => {
+            return Ok(Redirect::to("/login.html").into_response());
+        }
+        Err(error) => return Err(error),
+    };
+
     let state = state.inner.read().await;
     let mut tenants = state
         .tenants
@@ -523,13 +534,15 @@ async fn admin_portal(State(state): State<AppState>) -> Html<String> {
         .map(TenantRuntime::summary)
         .collect::<Vec<_>>();
     tenants.sort_by(|left, right| left.id.cmp(&right.id));
-    Html(render_admin_html(&tenants))
+    Ok(Html(render_admin_html(&tenants, &admin.email)).into_response())
 }
 
 async fn create_tenant(
     State(state): State<AppState>,
+    jar: CookieJar,
     Json(request): Json<CreateTenantRequest>,
 ) -> Result<Json<TenantSummary>, ApiError> {
+    require_admin(&state, &jar).await?;
     let tenant_id = request.id.trim().to_ascii_lowercase();
     if tenant_id.is_empty() {
         return Err(ApiError::bad_request("tenant id is required".to_string()));
@@ -651,8 +664,10 @@ async fn create_tenant(
 async fn update_tenant_model(
     AxumPath(tenant_id): AxumPath<String>,
     State(state): State<AppState>,
+    jar: CookieJar,
     Json(request): Json<UpdateModelRequest>,
 ) -> Result<Json<TenantSummary>, ApiError> {
+    require_admin(&state, &jar).await?;
     let provider = request.provider.trim().to_ascii_lowercase();
     if !provider.is_empty()
         && !matches!(provider.as_str(), "gemini" | "gemini-openai" | "openai-compatible")
@@ -710,6 +725,27 @@ async fn require_auth(state: &AppState, jar: &CookieJar) -> Result<Authenticated
         .database
         .get_account_by_session(&token_hash, &Utc::now().to_rfc3339())?
         .ok_or_else(|| ApiError::unauthorized("session is invalid or expired".to_string()))
+}
+
+async fn require_admin(
+    state: &AppState,
+    jar: &CookieJar,
+) -> Result<AuthenticatedAccount, ApiError> {
+    let account = require_auth(state, jar).await?;
+    let admin_emails = configured_admin_emails();
+    if admin_emails.is_empty() {
+        return Err(ApiError::forbidden(
+            "admin access is disabled until WELLBEING_ADMIN_EMAILS is configured".to_string(),
+        ));
+    }
+
+    if admin_emails.contains(&account.email.to_ascii_lowercase()) {
+        Ok(account)
+    } else {
+        Err(ApiError::forbidden(
+            "your account is not allowed to access the admin panel".to_string(),
+        ))
+    }
 }
 
 fn issue_session(
@@ -796,6 +832,13 @@ impl ApiError {
         }
     }
 
+    fn forbidden(message: String) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message,
+        }
+    }
+
     fn internal(message: String) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -834,6 +877,16 @@ fn normalize_optional_string(value: String) -> Option<String> {
     }
 }
 
+fn configured_admin_emails() -> HashSet<String> {
+    env::var("WELLBEING_ADMIN_EMAILS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .collect()
+}
+
 fn resolve_requested_tenant(
     runtime: &RuntimeState,
     requested_tenant_id: Option<&str>,
@@ -849,7 +902,7 @@ fn resolve_requested_tenant(
         .ok_or_else(|| ApiError::bad_request(format!("tenant '{tenant_id}' was not found")))
 }
 
-fn render_admin_html(tenants: &[TenantSummary]) -> String {
+fn render_admin_html(tenants: &[TenantSummary], admin_email: &str) -> String {
     let cards = tenants
         .iter()
         .map(|tenant| {
@@ -913,6 +966,7 @@ fn render_admin_html(tenants: &[TenantSummary]) -> String {
 </head>
 <body>
   <h1>Wellbeing admin model controls</h1>
+  <p>Signed in as <strong>{admin_email}</strong>.</p>
   <p>Use this portal to manage Gemini endpoint settings, add new tenants, and keep lightweight companion instances portable. Changes are written back to <code>config.json</code>.</p>
   <section class="card" style="margin-bottom: 1rem;">
     <h2>Create a new tenant</h2>
@@ -990,7 +1044,8 @@ fn render_admin_html(tenants: &[TenantSummary]) -> String {
   </script>
 </body>
 </html>"#,
-        cards = cards
+        cards = cards,
+        admin_email = html_escape(admin_email)
     )
 }
 
