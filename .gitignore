@@ -4,3 +4,5 @@
 /.env
 /data
 /config/data
+/tools/__pycache__/
+/tools/prompt_harness_results.json
