@@ -6,6 +6,24 @@ const App = (() => {
     tenants: []
   };
 
+  const GEMINI_MODEL_OPTIONS = [
+    {
+      value: 'gemini-2.5-flash',
+      label: 'Gemini 2.5 Flash — balanced default',
+      help: 'Best default for everyday supportive chat. Fast, capable, and usually gentler on quota than a heavier model.'
+    },
+    {
+      value: 'gemini-2.5-pro',
+      label: 'Gemini 2.5 Pro — strongest but heaviest',
+      help: 'Usually the most capable preset here, but it will likely consume quota faster and may respond more slowly.'
+    },
+    {
+      value: 'gemini-2.0-flash',
+      label: 'Gemini 2.0 Flash — lighter/quota-friendly',
+      help: 'A lighter preset for quick check-ins and lower quota pressure when you want something cheaper to run.'
+    }
+  ];
+
   function $(sel, ctx = document) {
     return ctx.querySelector(sel);
   }
@@ -265,6 +283,46 @@ const App = (() => {
     });
   }
 
+  function populateGeminiModelSelects() {
+    $$('[data-gemini-model-select]').forEach((select) => {
+      if (select.dataset.populated === 'true') return;
+
+      const selected = select.dataset.selectedModel || select.value || GEMINI_MODEL_OPTIONS[0].value;
+      select.innerHTML = '';
+
+      GEMINI_MODEL_OPTIONS.forEach((model) => {
+        const option = document.createElement('option');
+        option.value = model.value;
+        option.textContent = model.label;
+        option.selected = model.value === selected;
+        select.appendChild(option);
+      });
+
+      if (![...select.options].some((option) => option.value === selected) && selected) {
+        const customOption = document.createElement('option');
+        customOption.value = selected;
+        customOption.textContent = `${selected} — saved custom model`;
+        customOption.selected = true;
+        select.prepend(customOption);
+      }
+
+      select.dataset.populated = 'true';
+      updateGeminiModelHelp(select);
+      on(select, 'change', () => updateGeminiModelHelp(select));
+    });
+  }
+
+  function updateGeminiModelHelp(select) {
+    const container = select.closest('.form-group');
+    const helper = $('[data-gemini-model-help]', container);
+    if (!helper) return;
+
+    const match = GEMINI_MODEL_OPTIONS.find((model) => model.value === select.value);
+    helper.textContent = match
+      ? match.help
+      : 'Saved custom model name. If Google retires or renames it later, switch back to one of the presets above.';
+  }
+
   function checkinTimeToClock(label) {
     switch (label) {
       case 'morning': return '09:00';
@@ -312,7 +370,7 @@ const App = (() => {
       telegram_bot_username: optionalValue(data.telegram_username),
       personal_inference_enabled: personalInferenceEnabled,
       personal_inference_model: personalInferenceEnabled
-        ? (optionalValue(data.personal_inference_model) || 'gemini-2.5-flash')
+        ? (optionalValue(data.personal_inference_model) || GEMINI_MODEL_OPTIONS[0].value)
         : null,
       personal_inference_api_key: personalInferenceEnabled
         ? optionalValue(data.personal_inference_api_key)
@@ -345,7 +403,7 @@ const App = (() => {
     setValue(form, 'timezone', profile.timezone || browserTimezone());
     setValue(form, 'telegram_token', profile.telegram_bot_token);
     setValue(form, 'telegram_username', profile.telegram_bot_username);
-    setValue(form, 'personal_inference_model', profile.personal_inference_model || 'gemini-2.5-flash');
+    setValue(form, 'personal_inference_model', profile.personal_inference_model || GEMINI_MODEL_OPTIONS[0].value);
     const inferenceToggle = $('[name="personal_inference_enabled"]', form);
     if (inferenceToggle) {
       inferenceToggle.checked = Boolean(profile.personal_inference_enabled);
@@ -388,6 +446,7 @@ const App = (() => {
   function initPersonalInferenceControls(form, profile = {}) {
     const toggle = $('[name="personal_inference_enabled"]', form);
     if (!toggle) return;
+    updateGeminiModelHelp($('[name="personal_inference_model"]', form));
     updatePersonalInferenceStatus(form, profile);
     on(toggle, 'change', () => updatePersonalInferenceStatus(form, profile));
   }
@@ -667,6 +726,7 @@ const App = (() => {
     await initTenantSelectors();
     syncTenantLinks();
     populateTimezoneSelects();
+    populateGeminiModelSelects();
     $$('.tabs').forEach((tabs) => initTabs(tabs.parentElement));
     initModals();
     await initLoginForm();

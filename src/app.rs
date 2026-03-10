@@ -171,6 +171,8 @@ pub fn router(state: AppState) -> Router {
         .route("/onboarding.html", get(onboarding_page))
         .route("/chat", get(chat_page))
         .route("/chat.html", get(chat_page))
+        .route("/gemini-guide", get(gemini_guide_page))
+        .route("/gemini-guide.html", get(gemini_guide_page))
         .route("/settings", get(settings_page))
         .route("/settings.html", get(settings_page))
         .route("/css/*path", get(css_asset))
@@ -207,6 +209,10 @@ async fn onboarding_page(State(state): State<AppState>) -> Result<Html<String>, 
 
 async fn chat_page(State(state): State<AppState>) -> Result<Html<String>, ApiError> {
     serve_html(&state.web_root, "chat.html").await
+}
+
+async fn gemini_guide_page(State(state): State<AppState>) -> Result<Html<String>, ApiError> {
+    serve_html(&state.web_root, "gemini-guide.html").await
 }
 
 async fn settings_page(State(state): State<AppState>) -> Result<Html<String>, ApiError> {

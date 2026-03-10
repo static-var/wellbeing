@@ -140,12 +140,14 @@
             </div>
             <div class="form-group">
               <label for="s-personal_inference_model">Gemini model</label>
-              <input type="text" id="s-personal_inference_model" name="personal_inference_model" placeholder="gemini-2.5-flash" autocomplete="off" />
+              <select id="s-personal_inference_model" name="personal_inference_model" data-gemini-model-select></select>
+              <p class="hint" data-gemini-model-help></p>
             </div>
             <div class="form-group" style="margin-bottom:0;">
               <label for="s-personal_inference_api_key">Gemini API key</label>
               <input type="password" id="s-personal_inference_api_key" name="personal_inference_api_key" placeholder="Paste a new Gemini key to save or rotate it" autocomplete="off" />
               <p class="hint" data-personal-key-status>A saved key can stay in place even if you leave this field blank.</p>
+              <p class="hint">Need a walkthrough first? Open the <a href="/gemini-guide.html" target="_blank" rel="noopener">Gemini key guide</a>.</p>
             </div>
           </div>
         </section>

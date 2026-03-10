@@ -218,13 +218,15 @@
 
           <div class="form-group">
             <label for="personal_inference_model">Gemini model</label>
-            <input type="text" id="personal_inference_model" name="personal_inference_model" placeholder="gemini-2.5-flash" autocomplete="off" />
+            <select id="personal_inference_model" name="personal_inference_model" data-gemini-model-select></select>
+            <p class="hint" data-gemini-model-help></p>
           </div>
 
           <div class="form-group">
             <label for="personal_inference_api_key">Gemini API key</label>
             <input type="password" id="personal_inference_api_key" name="personal_inference_api_key" placeholder="AIza..." autocomplete="off" />
             <p class="hint" data-personal-key-status>Your key is optional. If you add one, it will be encrypted before it is stored.</p>
+            <p class="hint">Need help finding a key or understanding Google's data terms? Read the <a href="/gemini-guide.html" target="_blank" rel="noopener">Gemini key guide</a>.</p>
           </div>
 
           <hr class="divider" />

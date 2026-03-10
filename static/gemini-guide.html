@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gemini key guide — Wellbeing</title>
+  <meta name="description" content="How to get a Gemini API key, what the preset models mean, and what to know about Google's own data handling." />
+  <link rel="stylesheet" href="/css/style.css" />
+  <style>
+    .guide-shell {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top, rgba(244, 212, 161, 0.24), transparent 30%),
+        linear-gradient(180deg, rgba(14, 27, 36, 0.98), rgba(8, 18, 24, 1));
+    }
+
+    .guide-wrap {
+      max-width: 1020px;
+      margin: 0 auto;
+      padding: 4.5rem 1.25rem 5rem;
+    }
+
+    .guide-hero {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 32px;
+      padding: 2rem;
+      background: rgba(14, 23, 30, 0.82);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
+    }
+
+    .guide-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.45rem 0.9rem;
+      border-radius: 999px;
+      background: rgba(244, 212, 161, 0.12);
+      color: #f4d4a1;
+      font-size: 0.82rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .guide-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin-top: 1.5rem;
+    }
+
+    .guide-card {
+      border-radius: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      padding: 1.2rem;
+    }
+
+    .guide-card strong {
+      display: block;
+      margin-bottom: 0.45rem;
+      color: #fff3de;
+    }
+
+    .warning-card {
+      margin-top: 1.4rem;
+      border-left: 4px solid #f0b46d;
+      background: rgba(240, 180, 109, 0.1);
+    }
+
+    .steps {
+      counter-reset: guide-step;
+      display: grid;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .step {
+      counter-increment: guide-step;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 1rem;
+      align-items: start;
+      border-radius: 22px;
+      padding: 1.1rem 1.15rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .step::before {
+      content: counter(guide-step);
+      width: 2rem;
+      height: 2rem;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      color: #0d1720;
+      background: linear-gradient(135deg, #f4d4a1, #d7f0d7);
+    }
+
+    .link-list {
+      display: grid;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .link-list a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.95rem 1rem;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      text-decoration: none;
+      color: #f6efe2;
+    }
+
+    .link-list a:hover {
+      transform: translateY(-1px);
+      border-color: rgba(244, 212, 161, 0.35);
+    }
+  </style>
+</head>
+<body class="guide-shell">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/" class="topbar-brand" aria-label="Wellbeing home">
+        <span class="brand-dot" aria-hidden="true"></span>
+        Wellbeing
+      </a>
+      <nav class="topbar-nav" aria-label="Main navigation">
+        <a href="/settings.html" class="topbar-link">Settings</a>
+        <a href="/login.html" class="topbar-link">Sign in</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="guide-wrap">
+    <section class="guide-hero">
+      <span class="guide-eyebrow">Gemini guide</span>
+      <h1 style="font-size: clamp(2.2rem, 5vw, 4.6rem); margin: 1rem 0 0.8rem; line-height: 0.95;">Bring your own Gemini key, with eyes open.</h1>
+      <p class="text-secondary" style="max-width: 55rem; font-size: 1.02rem;">
+        This page shows you how to get a Gemini API key, what the model presets roughly feel like, and the privacy line you should understand first:
+        if you choose to use your own Gemini key, your requests go to Google and Google's own terms, privacy practices, quotas, and retention rules apply.
+      </p>
+
+      <div class="guide-grid">
+        <article class="guide-card">
+          <strong>Best default</strong>
+          <span><code>gemini-2.5-flash</code> is usually the safest everyday pick for supportive chat: fast, capable, and easier on quota than a heavier model.</span>
+        </article>
+        <article class="guide-card">
+          <strong>Highest depth</strong>
+          <span><code>gemini-2.5-pro</code> should feel more thoughtful and nuanced, but it will generally cost more quota and can be slower.</span>
+        </article>
+        <article class="guide-card">
+          <strong>Budget option</strong>
+          <span><code>gemini-2.0-flash</code> is a lighter, lower-friction option when you mostly want quick check-ins and less quota pressure.</span>
+        </article>
+      </div>
+
+      <article class="guide-card warning-card">
+        <strong>Important privacy note</strong>
+        <span>
+          When you enable a personal Gemini key in Wellbeing, we forward your chat request to Google's Gemini API using the key you supplied.
+          Google may log, retain, process, or inspect metadata and request content under its own policies. We do not control Google's storage, review, training, retention, or abuse-monitoring behavior, and we are not responsible for what Google does with the data you send through its service.
+        </span>
+      </article>
+    </section>
+
+    <section class="landing-section container" style="padding-top: 2.5rem;">
+      <h2>How to get a Gemini API key</h2>
+      <div class="steps">
+        <article class="step">
+          <div>
+            <strong>Open Google AI Studio</strong>
+            <p class="text-secondary">Go to AI Studio and sign into the Google account you want tied to the key.</p>
+          </div>
+        </article>
+        <article class="step">
+          <div>
+            <strong>Create or choose a project/key</strong>
+            <p class="text-secondary">Use the API key screen to create a key, then copy it somewhere safe. In most cases it begins with something like <code>AIza...</code>.</p>
+          </div>
+        </article>
+        <article class="step">
+          <div>
+            <strong>Paste it into Wellbeing</strong>
+            <p class="text-secondary">In onboarding or settings, enable “Use my own Gemini API key”, choose a preset model, paste the key, and save.</p>
+          </div>
+        </article>
+        <article class="step">
+          <div>
+            <strong>Review Google's terms yourself</strong>
+            <p class="text-secondary">Before you rely on a personal key, read Google's current Gemini terms and privacy pages directly. They can change over time.</p>
+          </div>
+        </article>
+      </div>
+
+      <div class="link-list">
+        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">
+          <span>Open Google AI Studio API key page</span>
+          <span>↗</span>
+        </a>
+        <a href="https://ai.google.dev/gemini-api/docs/api-key" target="_blank" rel="noopener">
+          <span>Read Google's Gemini API key documentation</span>
+          <span>↗</span>
+        </a>
+        <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">
+          <span>Review Google's Gemini API terms</span>
+          <span>↗</span>
+        </a>
+        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">
+          <span>Review Google's privacy policy</span>
+          <span>↗</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="landing-section--tinted" aria-labelledby="model-choice-heading">
+      <h2 id="model-choice-heading" class="text-center mb-lg">Which preset should you choose?</h2>
+      <div class="feature-grid container">
+        <article class="feature-card">
+          <div class="feature-icon feature-icon--sand" aria-hidden="true">⚡</div>
+          <h3><code>gemini-2.5-flash</code></h3>
+          <p>A balanced default for most people. Good when you want calm everyday conversation without burning through quota too quickly.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon feature-icon--lavender" aria-hidden="true">🧠</div>
+          <h3><code>gemini-2.5-pro</code></h3>
+          <p>Use this when you want richer nuance and stronger reasoning. Expect it to feel heavier on quota and potentially slower.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon feature-icon--green" aria-hidden="true">🌿</div>
+          <h3><code>gemini-2.0-flash</code></h3>
+          <p>A lighter preset for quick check-ins and lower-friction conversations when you'd rather stretch a free quota further.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
