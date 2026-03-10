@@ -5,17 +5,24 @@ use chrono_tz::Tz;
 use tracing::{info, warn};
 
 use crate::{
-    config::CheckinRuntimeConfig,
+    companion,
+    config::{CheckinRuntimeConfig, TelegramRuntimeConfig},
     database::{AppDatabase, DueCheckin},
     error::{AppError, Result},
+    telegram,
 };
 
-pub fn spawn_checkin_scheduler(database: Arc<AppDatabase>, config: CheckinRuntimeConfig) {
+pub fn spawn_checkin_scheduler(
+    database: Arc<AppDatabase>,
+    client: reqwest::Client,
+    telegram_config: TelegramRuntimeConfig,
+    config: CheckinRuntimeConfig,
+) {
     tokio::spawn(async move {
         let interval = Duration::from_secs(config.tick_interval_secs);
 
         loop {
-            if let Err(error) = run_checkin_tick(&database, &config).await {
+            if let Err(error) = run_checkin_tick(&database, &client, &telegram_config, &config).await {
                 warn!("check-in tick failed: {error}");
             }
 
@@ -24,7 +31,12 @@ pub fn spawn_checkin_scheduler(database: Arc<AppDatabase>, config: CheckinRuntim
     });
 }
 
-async fn run_checkin_tick(database: &AppDatabase, config: &CheckinRuntimeConfig) -> Result<()> {
+async fn run_checkin_tick(
+    database: &AppDatabase,
+    client: &reqwest::Client,
+    telegram_config: &TelegramRuntimeConfig,
+    config: &CheckinRuntimeConfig,
+) -> Result<()> {
     let now = Utc::now();
     let due = database.due_checkins(now, config.batch_size)?;
 
@@ -33,7 +45,7 @@ async fn run_checkin_tick(database: &AppDatabase, config: &CheckinRuntimeConfig)
     }
 
     for user in due {
-        if let Err(error) = process_due_checkin(database, &user, now, config).await {
+        if let Err(error) = process_due_checkin(database, client, telegram_config, &user, now, config).await {
             database.disable_checkins(user.account_id)?;
             warn!(
                 tenant_id = %user.tenant_id,
@@ -49,6 +61,8 @@ async fn run_checkin_tick(database: &AppDatabase, config: &CheckinRuntimeConfig)
 
 async fn process_due_checkin(
     database: &AppDatabase,
+    client: &reqwest::Client,
+    telegram_config: &TelegramRuntimeConfig,
     user: &DueCheckin,
     now: DateTime<Utc>,
     config: &CheckinRuntimeConfig,
@@ -81,6 +95,33 @@ async fn process_due_checkin(
     }
 
     database.record_checkin_attempt(user.account_id, now, next_checkin_at)?;
+    if let (Some(bot_token), Some(chat_id)) = (&user.telegram_bot_token, user.telegram_chat_id) {
+        let message = companion::build_checkin_message(user);
+        telegram::send_text_message(
+            client,
+            &telegram_config.api_base_url,
+            bot_token,
+            chat_id,
+            &message,
+        )
+        .await?;
+        database.append_chat_message(user.account_id, "assistant", &message)?;
+        database.record_checkin_sent(user.account_id, now)?;
+        info!(
+            tenant_id = %user.tenant_id,
+            email = %user.email,
+            companion_name = %user.companion_name,
+            user_name = ?user.user_name,
+            preferred_channel = ?user.preferred_channel,
+            timezone = %user.timezone,
+            due_at = %user.next_checkin_at,
+            next_checkin_at = %next_checkin_at,
+            chat_id = chat_id,
+            "telegram check-in sent"
+        );
+        return Ok(());
+    }
+
     info!(
         tenant_id = %user.tenant_id,
         email = %user.email,
@@ -88,10 +129,9 @@ async fn process_due_checkin(
         user_name = ?user.user_name,
         preferred_channel = ?user.preferred_channel,
         timezone = %user.timezone,
-        quiet_hours = ?user.quiet_hours,
         due_at = %user.next_checkin_at,
         next_checkin_at = %next_checkin_at,
-        "check-in is due and ready for dispatch"
+        "check-in is due but no telegram binding is available yet"
     );
 
     Ok(())
@@ -279,9 +319,12 @@ mod tests {
             timezone: "UTC".to_string(),
             preferred_channel: Some("web".to_string()),
             cadence_days: 1,
+            checkin_style: Some("mixed".to_string()),
             checkin_local_time: "19:00".to_string(),
             checkin_days: vec![1, 2, 3, 4, 5, 6, 7],
             quiet_hours: quiet_hours.into_iter().map(str::to_string).collect(),
+            telegram_bot_token: None,
+            telegram_chat_id: None,
             last_active_at: None,
             next_checkin_at: Utc.with_ymd_and_hms(2026, 3, 10, 0, 0, 0).unwrap(),
         }

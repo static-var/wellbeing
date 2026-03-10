@@ -15,11 +15,10 @@ use tokio::{fs, sync::RwLock};
 
 use crate::{
     auth,
+    companion,
     config::{AppConfig, ModelConfig},
     database::{AppDatabase, AuthenticatedAccount, ChatMessageRecord, ProfileRecord, UpsertProfileInput},
     error::AppError,
-    guardrails::{self, GuardrailDecision},
-    provider::{self, ProviderMessage},
     tenant::{TenantRuntime, TenantSummary},
 };
 
@@ -52,6 +51,18 @@ impl AppState {
 
     pub async fn tenant_count(&self) -> usize {
         self.inner.read().await.tenants.len()
+    }
+
+    pub fn database(&self) -> Arc<AppDatabase> {
+        self.database.clone()
+    }
+
+    pub fn http_client(&self) -> reqwest::Client {
+        self.http_client.clone()
+    }
+
+    pub async fn tenant(&self, tenant_id: &str) -> Option<TenantRuntime> {
+        self.inner.read().await.tenants.get(tenant_id).cloned()
     }
 }
 
@@ -391,44 +402,19 @@ async fn send_chat(
         return Err(ApiError::bad_request("message must not be empty".to_string()));
     }
 
-    state.database.append_chat_message(account.id, "user", input)?;
-
-    let reply = match guardrails::evaluate_user_message(input) {
-        GuardrailDecision::Reply(message) => message,
-        GuardrailDecision::Allow => {
-            let runtime = state.inner.read().await;
-            let tenant = runtime
-                .tenants
-                .get(&account.tenant_id)
-                .ok_or_else(|| ApiError::internal("tenant not found for account".to_string()))?
-                .clone();
-            drop(runtime);
-
-            let history = state.database.list_chat_messages(account.id, 24)?;
-            let mut messages = Vec::with_capacity(history.len() + 1);
-            messages.push(ProviderMessage {
-                role: "system".to_string(),
-                content: guardrails::system_prompt(&tenant, &account.profile),
-            });
-            for message in history {
-                messages.push(ProviderMessage {
-                    role: message.role,
-                    content: message.content,
-                });
-            }
-
-            provider::generate_reply(&state.http_client, &tenant.model, messages).await?
-        }
-    };
-
-    state.database.append_chat_message(account.id, "assistant", &reply)?;
-    Ok(Json(ChatReplyEnvelope {
-        reply: ChatMessageRecord {
-            role: "assistant".to_string(),
-            content: reply,
-            created_at: Utc::now().to_rfc3339(),
-        },
-    }))
+    let tenant = state
+        .tenant(&account.tenant_id)
+        .await
+        .ok_or_else(|| ApiError::internal("tenant not found for account".to_string()))?;
+    let reply = companion::respond_to_user_message(
+        state.database.as_ref(),
+        &state.http_client,
+        &tenant,
+        &account,
+        input,
+    )
+    .await?;
+    Ok(Json(ChatReplyEnvelope { reply }))
 }
 
 async fn reset_bot(

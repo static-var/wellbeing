@@ -18,6 +18,8 @@ pub struct AppConfig {
     pub checkins: CheckinRuntimeConfig,
     #[serde(default)]
     pub heartbeat: Option<HeartbeatConfig>,
+    #[serde(default)]
+    pub telegram: TelegramRuntimeConfig,
     pub whisper: WhisperConfig,
     #[serde(default)]
     pub tenants: Vec<TenantConfig>,
@@ -130,6 +132,23 @@ impl Default for CheckinRuntimeConfig {
             tick_interval_secs: default_checkin_tick_interval_secs(),
             batch_size: default_checkin_batch_size(),
             recent_activity_grace_minutes: default_recent_activity_grace_minutes(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TelegramRuntimeConfig {
+    #[serde(default = "default_telegram_poll_interval_secs")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_telegram_api_base_url")]
+    pub api_base_url: String,
+}
+
+impl Default for TelegramRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_secs: default_telegram_poll_interval_secs(),
+            api_base_url: default_telegram_api_base_url(),
         }
     }
 }
@@ -305,6 +324,14 @@ fn default_checkin_batch_size() -> usize {
 
 fn default_recent_activity_grace_minutes() -> i64 {
     360
+}
+
+fn default_telegram_poll_interval_secs() -> u64 {
+    5
+}
+
+fn default_telegram_api_base_url() -> String {
+    "https://api.telegram.org".to_string()
 }
 
 fn default_whisper_worker_url() -> String {

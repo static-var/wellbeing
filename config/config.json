@@ -8,6 +8,10 @@
     "batch_size": 25,
     "recent_activity_grace_minutes": 360
   },
+  "telegram": {
+    "poll_interval_secs": 5,
+    "api_base_url": "https://api.telegram.org"
+  },
   "whisper": {
     "worker_url": "http://127.0.0.1:9000",
     "model": "base.en",

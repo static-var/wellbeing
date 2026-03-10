@@ -1,5 +1,6 @@
 mod app;
 mod checkins;
+mod companion;
 mod config;
 mod database;
 mod error;
@@ -8,6 +9,7 @@ mod guardrails;
 mod heartbeat;
 mod provider;
 mod tenant;
+mod telegram;
 
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -39,6 +41,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| config_dir.clone());
     let bind_addr = config.bind_addr.clone();
     let checkins = config.checkins.clone();
+    let telegram = config.telegram.clone();
     let database_path = resolve_runtime_path(&project_root, &config.database.path);
     let heartbeat = config.heartbeat.clone();
     let web_root = project_root.join("static");
@@ -52,7 +55,8 @@ async fn main() -> Result<()> {
     let database = Arc::new(AppDatabase::open(database_path)?);
     let state = AppState::new(config_path.clone(), config, tenants, database.clone(), web_root);
     heartbeat::spawn_heartbeat(heartbeat, state.tenant_count().await);
-    checkins::spawn_checkin_scheduler(database.clone(), checkins);
+    checkins::spawn_checkin_scheduler(database.clone(), state.http_client(), telegram.clone(), checkins);
+    telegram::spawn_gateway(state.clone(), telegram);
 
     let app = app::router(state);
     let addr: SocketAddr = bind_addr

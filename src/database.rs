@@ -92,11 +92,21 @@ pub struct DueCheckin {
     pub timezone: String,
     pub preferred_channel: Option<String>,
     pub cadence_days: i64,
+    pub checkin_style: Option<String>,
     pub checkin_local_time: String,
     pub checkin_days: Vec<u32>,
     pub quiet_hours: Vec<String>,
+    pub telegram_bot_token: Option<String>,
+    pub telegram_chat_id: Option<i64>,
     pub last_active_at: Option<DateTime<Utc>>,
     pub next_checkin_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TelegramBotRecord {
+    pub account_id: i64,
+    pub tenant_id: String,
+    pub bot_token: String,
 }
 
 impl AppDatabase {
@@ -279,6 +289,30 @@ impl AppDatabase {
             .map_err(Into::into)
     }
 
+    pub fn find_account_by_telegram_bot_token(
+        &self,
+        bot_token: &str,
+    ) -> Result<Option<AuthenticatedAccount>> {
+        let connection = self.connect()?;
+        let account_id: Option<i64> = connection
+            .query_row(
+                r#"
+                SELECT account_id
+                FROM profiles
+                WHERE telegram_bot_token = ?1
+                "#,
+                params![bot_token],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(account_id) = account_id else {
+            return Ok(None);
+        };
+
+        self.get_account_with_profile(account_id)
+    }
+
     pub fn update_profile(&self, account_id: i64, input: &UpsertProfileInput) -> Result<ProfileRecord> {
         let connection = self.connect()?;
         let now = Utc::now().to_rfc3339();
@@ -387,15 +421,17 @@ impl AppDatabase {
             params![account_id, role, content, now],
         )?;
 
-        connection.execute(
-            r#"
-            UPDATE profiles
-            SET last_active_at = ?1,
-                updated_at = ?1
-            WHERE account_id = ?2
-            "#,
-            params![Utc::now().to_rfc3339(), account_id],
-        )?;
+        if role == "user" {
+            connection.execute(
+                r#"
+                UPDATE profiles
+                SET last_active_at = ?1,
+                    updated_at = ?1
+                WHERE account_id = ?2
+                "#,
+                params![Utc::now().to_rfc3339(), account_id],
+            )?;
+        }
 
         Ok(())
     }
@@ -435,6 +471,7 @@ impl AppDatabase {
             "#,
             params![now, account_id],
         )?;
+        connection.execute("DELETE FROM telegram_bindings WHERE account_id = ?1", params![account_id])?;
         Ok(())
     }
 
@@ -449,6 +486,7 @@ impl AppDatabase {
         connection.execute("DELETE FROM profiles WHERE account_id = ?1", params![account_id])?;
         connection.execute("DELETE FROM chat_messages WHERE account_id = ?1", params![account_id])?;
         connection.execute("DELETE FROM memory_summaries WHERE account_id = ?1", params![account_id])?;
+        connection.execute("DELETE FROM telegram_bindings WHERE account_id = ?1", params![account_id])?;
         Ok(())
     }
 
@@ -463,15 +501,21 @@ impl AppDatabase {
                 p.companion_name,
                 p.user_name,
                 p.timezone,
-                NULL AS preferred_channel,
+                CASE WHEN tb.chat_id IS NOT NULL THEN 'telegram' ELSE NULL END AS preferred_channel,
                 1 AS cadence_days,
+                p.checkin_style,
                 p.checkin_local_time,
                 p.checkin_days_json,
                 p.quiet_hours_json,
+                p.telegram_bot_token,
+                tb.chat_id,
                 p.last_active_at,
                 p.next_checkin_at
             FROM accounts a
             JOIN profiles p ON p.account_id = a.id
+            LEFT JOIN telegram_bindings tb
+              ON tb.account_id = a.id
+             AND tb.bot_token = p.telegram_bot_token
             WHERE a.deleted_at IS NULL
               AND p.checkins_enabled = 1
               AND p.next_checkin_at IS NOT NULL
@@ -482,10 +526,10 @@ impl AppDatabase {
         )?;
 
         let rows = statement.query_map(params![now.to_rfc3339(), limit as i64], |row| {
-            let checkin_days_json: String = row.get(9)?;
-            let quiet_hours_json: String = row.get(10)?;
-            let last_active_at: Option<String> = row.get(11)?;
-            let next_checkin_at: String = row.get(12)?;
+            let checkin_days_json: String = row.get(10)?;
+            let quiet_hours_json: String = row.get(11)?;
+            let last_active_at: Option<String> = row.get(14)?;
+            let next_checkin_at: String = row.get(15)?;
 
             Ok(DueCheckin {
                 account_id: row.get(0)?,
@@ -496,9 +540,12 @@ impl AppDatabase {
                 timezone: row.get(5)?,
                 preferred_channel: row.get(6)?,
                 cadence_days: row.get(7)?,
-                checkin_local_time: row.get(8)?,
+                checkin_style: row.get(8)?,
+                checkin_local_time: row.get(9)?,
                 checkin_days: serde_json::from_str(&checkin_days_json).unwrap_or_default(),
                 quiet_hours: serde_json::from_str(&quiet_hours_json).unwrap_or_default(),
+                telegram_bot_token: row.get(12)?,
+                telegram_chat_id: row.get(13)?,
                 last_active_at: last_active_at
                     .as_deref()
                     .map(parse_timestamp)
@@ -562,6 +609,128 @@ impl AppDatabase {
             WHERE account_id = ?2
             "#,
             params![now, account_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_checkin_sent(&self, account_id: i64, sent_at: DateTime<Utc>) -> Result<()> {
+        let connection = self.connect()?;
+        connection.execute(
+            r#"
+            UPDATE profiles
+            SET last_checkin_sent_at = ?1,
+                updated_at = ?1
+            WHERE account_id = ?2
+            "#,
+            params![sent_at.to_rfc3339(), account_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_active_telegram_bots(&self) -> Result<Vec<TelegramBotRecord>> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT a.id, a.tenant_id, p.telegram_bot_token
+            FROM accounts a
+            JOIN profiles p ON p.account_id = a.id
+            WHERE a.deleted_at IS NULL
+              AND p.telegram_bot_token IS NOT NULL
+              AND TRIM(p.telegram_bot_token) != ''
+            "#,
+        )?;
+
+        let rows = statement.query_map([], |row| {
+            Ok(TelegramBotRecord {
+                account_id: row.get(0)?,
+                tenant_id: row.get(1)?,
+                bot_token: row.get(2)?,
+            })
+        })?;
+
+        let mut bots = Vec::new();
+        for row in rows {
+            bots.push(row?);
+        }
+        Ok(bots)
+    }
+
+    pub fn telegram_poll_offset(&self, bot_token: &str) -> Result<i64> {
+        let connection = self.connect()?;
+        let offset = connection
+            .query_row(
+                r#"
+                SELECT next_update_id
+                FROM telegram_bot_state
+                WHERE bot_token = ?1
+                "#,
+                params![bot_token],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        Ok(offset)
+    }
+
+    pub fn set_telegram_poll_offset(&self, bot_token: &str, next_update_id: i64) -> Result<()> {
+        let connection = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            r#"
+            INSERT INTO telegram_bot_state (bot_token, next_update_id, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(bot_token) DO UPDATE SET
+                next_update_id = excluded.next_update_id,
+                updated_at = excluded.updated_at
+            "#,
+            params![bot_token, next_update_id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_telegram_binding(
+        &self,
+        account_id: i64,
+        bot_token: &str,
+        chat_id: i64,
+        telegram_user_id: Option<i64>,
+        telegram_username: Option<String>,
+        chat_type: &str,
+    ) -> Result<()> {
+        let connection = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            r#"
+            INSERT INTO telegram_bindings (
+                account_id,
+                bot_token,
+                chat_id,
+                telegram_user_id,
+                telegram_username,
+                chat_type,
+                created_at,
+                updated_at,
+                last_inbound_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)
+            ON CONFLICT(account_id) DO UPDATE SET
+                bot_token = excluded.bot_token,
+                chat_id = excluded.chat_id,
+                telegram_user_id = excluded.telegram_user_id,
+                telegram_username = excluded.telegram_username,
+                chat_type = excluded.chat_type,
+                updated_at = excluded.updated_at,
+                last_inbound_at = excluded.last_inbound_at
+            "#,
+            params![
+                account_id,
+                bot_token,
+                chat_id,
+                telegram_user_id,
+                normalize_optional(&telegram_username),
+                chat_type.trim(),
+                now
+            ],
         )?;
         Ok(())
     }
@@ -643,9 +812,29 @@ impl AppDatabase {
                 FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS telegram_bindings (
+                account_id INTEGER PRIMARY KEY,
+                bot_token TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                telegram_user_id INTEGER,
+                telegram_username TEXT,
+                chat_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_inbound_at TEXT,
+                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS telegram_bot_state (
+                bot_token TEXT PRIMARY KEY,
+                next_update_id INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token_hash);
             CREATE INDEX IF NOT EXISTS idx_profiles_due_checkins ON profiles(checkins_enabled, next_checkin_at);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_account ON chat_messages(account_id, id);
+            CREATE INDEX IF NOT EXISTS idx_telegram_bindings_chat ON telegram_bindings(chat_id);
             "#,
         )?;
         ensure_profile_column(&connection, "pronouns", "TEXT")?;
