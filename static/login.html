@@ -41,6 +41,11 @@
           <div class="tab-content active" id="tab-login" role="tabpanel" aria-labelledby="tab-btn-login">
             <form id="login-form" novalidate>
               <div class="form-group">
+                <label for="login-tenant">Companion space</label>
+                <select id="login-tenant" name="tenant_id" data-tenant-select></select>
+                <p class="hint">Pick the companion space you want to sign into.</p>
+              </div>
+              <div class="form-group">
                 <label for="login-email">Email</label>
                 <input type="email" id="login-email" name="email" autocomplete="email" placeholder="you@example.com" required />
               </div>
@@ -58,6 +63,11 @@
           <!-- Sign Up Tab -->
           <div class="tab-content" id="tab-signup" role="tabpanel" aria-labelledby="tab-btn-signup">
             <form id="signup-form" novalidate>
+              <div class="form-group">
+                <label for="signup-tenant">Companion space</label>
+                <select id="signup-tenant" name="tenant_id" data-tenant-select></select>
+                <p class="hint">New accounts are created inside one companion space at a time.</p>
+              </div>
               <div class="form-group">
                 <label for="signup-email">Email</label>
                 <input type="email" id="signup-email" name="email" autocomplete="email" placeholder="you@example.com" required />

@@ -1,4 +1,11 @@
-use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    env,
+    fs as stdfs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
 use axum::{
     extract::{Path as AxumPath, State},
@@ -16,7 +23,10 @@ use tokio::{fs, sync::RwLock};
 use crate::{
     auth,
     companion,
-    config::{AppConfig, ModelConfig},
+    config::{
+        AppConfig, GatewayBindings, ModelConfig, ProactiveConfig, TenantConfig,
+        TokenGatewayConfig, WebGatewayConfig,
+    },
     database::{AppDatabase, AuthenticatedAccount, ChatMessageRecord, ProfileRecord, UpsertProfileInput},
     error::AppError,
     tenant::{TenantRuntime, TenantSummary},
@@ -111,6 +121,18 @@ struct UpdateModelRequest {
 struct AuthRequest {
     email: String,
     password: String,
+    tenant_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTenantRequest {
+    id: String,
+    display_name: String,
+    route: Option<String>,
+    provider: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+    api_key_env: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,6 +188,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/me/account", delete(delete_account))
         .route("/api/chat/messages", get(list_messages))
         .route("/api/chat", post(send_chat))
+        .route("/api/admin/tenants", post(create_tenant))
         .route("/api/admin/tenants/:tenant_id/model", post(update_tenant_model))
         .with_state(state)
 }
@@ -269,14 +292,21 @@ async fn signup(
             "password must be at least 8 characters".to_string(),
         ));
     }
-    if state.database.find_account_by_email(&email)?.is_some() {
-        return Err(ApiError::bad_request("email is already registered".to_string()));
-    }
 
     let runtime = state.inner.read().await;
+    let tenant_id = resolve_requested_tenant(&runtime, request.tenant_id.as_deref())?;
+    if state
+        .database
+        .find_account_by_email_in_tenant(&tenant_id, &email)?
+        .is_some()
+    {
+        return Err(ApiError::bad_request(
+            "email is already registered for this companion".to_string(),
+        ));
+    }
     let default_tenant = runtime
         .tenants
-        .get(&runtime.default_tenant_id)
+        .get(&tenant_id)
         .ok_or_else(|| ApiError::internal("default tenant missing".to_string()))?;
 
     let password_hash = auth::hash_password(&request.password)?;
@@ -298,9 +328,13 @@ async fn login(
     Json(request): Json<AuthRequest>,
 ) -> Result<(CookieJar, Json<AuthEnvelope>), ApiError> {
     let email = request.email.trim().to_lowercase();
+    let runtime = state.inner.read().await;
+    let tenant_id = resolve_requested_tenant(&runtime, request.tenant_id.as_deref())?;
+    drop(runtime);
+
     let account_record = state
         .database
-        .find_account_by_email(&email)?
+        .find_account_by_email_in_tenant(&tenant_id, &email)?
         .ok_or_else(|| ApiError::bad_request("invalid email or password".to_string()))?;
 
     if !auth::verify_password(&account_record.password_hash, &request.password)? {
@@ -356,6 +390,7 @@ async fn update_profile(
     let account = require_auth(&state, &jar).await?;
 
     validate_profile_request(&request)?;
+    validate_personal_inference_request(&account.profile, &request)?;
 
     let profile = state.database.update_profile(account.id, &request)?;
     Ok(Json(ProfileEnvelope { profile }))
@@ -378,6 +413,46 @@ fn validate_profile_request(request: &UpsertProfileInput) -> Result<(), ApiError
     NaiveTime::parse_from_str(request.checkin_local_time.trim(), "%H:%M").map_err(|_| {
         ApiError::bad_request("checkin_local_time must use HH:MM format".to_string())
     })?;
+    if request.personal_inference_enabled
+        && request
+            .personal_inference_model
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+    {
+        return Err(ApiError::bad_request(
+            "personal_inference_model is required when personal inference is enabled".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_personal_inference_request(
+    current_profile: &ProfileRecord,
+    request: &UpsertProfileInput,
+) -> Result<(), ApiError> {
+    if !request.personal_inference_enabled {
+        return Ok(());
+    }
+
+    let has_new_key = request
+        .personal_inference_api_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !has_new_key && !current_profile.personal_inference_api_key_configured {
+        return Err(ApiError::bad_request(
+            "add a Gemini API key before enabling personal inference".to_string(),
+        ));
+    }
+    if has_new_key && env::var("WELLBEING_MASTER_KEY").is_err() {
+        return Err(ApiError::bad_request(
+            "WELLBEING_MASTER_KEY must be set on the server before personal Gemini keys can be stored"
+                .to_string(),
+        ));
+    }
 
     Ok(())
 }
@@ -444,6 +519,133 @@ async fn admin_portal(State(state): State<AppState>) -> Html<String> {
         .collect::<Vec<_>>();
     tenants.sort_by(|left, right| left.id.cmp(&right.id));
     Html(render_admin_html(&tenants))
+}
+
+async fn create_tenant(
+    State(state): State<AppState>,
+    Json(request): Json<CreateTenantRequest>,
+) -> Result<Json<TenantSummary>, ApiError> {
+    let tenant_id = request.id.trim().to_ascii_lowercase();
+    if tenant_id.is_empty() {
+        return Err(ApiError::bad_request("tenant id is required".to_string()));
+    }
+    if !tenant_id
+        .chars()
+        .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-' || value == '_')
+    {
+        return Err(ApiError::bad_request(
+            "tenant id may only contain lowercase letters, numbers, hyphens, and underscores"
+                .to_string(),
+        ));
+    }
+
+    let display_name = request.display_name.trim().to_string();
+    if display_name.is_empty() {
+        return Err(ApiError::bad_request("display_name is required".to_string()));
+    }
+
+    let mut state = state.inner.write().await;
+    if state.tenants.contains_key(&tenant_id) {
+        return Err(ApiError::bad_request(format!(
+            "tenant '{tenant_id}' already exists"
+        )));
+    }
+
+    let fallback_model = state
+        .config
+        .tenants
+        .iter()
+        .find(|tenant| tenant.id == state.default_tenant_id)
+        .map(|tenant| tenant.model.clone())
+        .or_else(|| state.config.tenants.first().map(|tenant| tenant.model.clone()))
+        .ok_or_else(|| ApiError::internal("default tenant config missing".to_string()))?;
+
+    let model = ModelConfig {
+        provider: request
+            .provider
+            .and_then(normalize_optional_string)
+            .unwrap_or_else(|| fallback_model.provider.clone()),
+        base_url: request
+            .base_url
+            .and_then(normalize_optional_string)
+            .unwrap_or_else(|| fallback_model.base_url.clone()),
+        model: request
+            .model
+            .and_then(normalize_optional_string)
+            .unwrap_or_else(|| fallback_model.model.clone()),
+        api_key_env: request
+            .api_key_env
+            .and_then(normalize_optional_string)
+            .or_else(|| fallback_model.api_key_env.clone()),
+    };
+
+    let route = request
+        .route
+        .and_then(normalize_optional_string)
+        .unwrap_or_else(|| format!("/t/{tenant_id}"));
+    let tenant_config = TenantConfig {
+        id: tenant_id.clone(),
+        display_name: display_name.clone(),
+        route,
+        agent_path: format!("../templates/tenant/{tenant_id}/agent.md"),
+        bootstrap_path: format!("../templates/tenant/{tenant_id}/bootstrap.md"),
+        memory_path: format!("../data/{tenant_id}.sqlite"),
+        model,
+        proactive: ProactiveConfig {
+            gentle_checkins_enabled: true,
+            quiet_hours: vec!["22:00-07:00".to_string()],
+        },
+        gateways: GatewayBindings {
+            web: Some(WebGatewayConfig { enabled: true }),
+            telegram: Some(TokenGatewayConfig {
+                enabled: true,
+                token_env: Some(format!("{}_TELEGRAM_TOKEN", tenant_id.to_ascii_uppercase().replace('-', "_"))),
+                binding: None,
+            }),
+            whatsapp: None,
+            discord: None,
+        },
+    };
+    tenant_config
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+    let config_dir = state
+        .config_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let agent_path = tenant_config.resolve_path(&config_dir, &tenant_config.agent_path);
+    let bootstrap_path = tenant_config.resolve_path(&config_dir, &tenant_config.bootstrap_path);
+    let tenant_template_dir = agent_path
+        .parent()
+        .ok_or_else(|| ApiError::internal("tenant template path is invalid".to_string()))?;
+    stdfs::create_dir_all(tenant_template_dir).map_err(|source| AppError::CreateDirectory {
+        path: tenant_template_dir.to_path_buf(),
+        source,
+    })?;
+    stdfs::write(&agent_path, render_default_agent_template(&display_name))
+        .map_err(|source| AppError::WriteConfig {
+            path: agent_path.clone(),
+            source,
+        })?;
+    stdfs::write(&bootstrap_path, render_default_bootstrap_template(&display_name))
+        .map_err(|source| AppError::WriteConfig {
+            path: bootstrap_path.clone(),
+            source,
+        })?;
+
+    state.config.tenants.push(tenant_config.clone());
+    state
+        .config
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    state.config.save(&state.config_path)?;
+
+    let runtime_tenant = TenantRuntime::from_config(&config_dir, &tenant_config)?;
+    let summary = runtime_tenant.summary();
+    state.tenants.insert(tenant_id, runtime_tenant);
+    Ok(Json(summary))
 }
 
 async fn update_tenant_model(
@@ -617,6 +819,21 @@ fn normalize_optional_string(value: String) -> Option<String> {
     }
 }
 
+fn resolve_requested_tenant(
+    runtime: &RuntimeState,
+    requested_tenant_id: Option<&str>,
+) -> Result<String, ApiError> {
+    let tenant_id = requested_tenant_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(runtime.default_tenant_id.as_str());
+    runtime
+        .tenants
+        .contains_key(tenant_id)
+        .then(|| tenant_id.to_string())
+        .ok_or_else(|| ApiError::bad_request(format!("tenant '{tenant_id}' was not found")))
+}
+
 fn render_admin_html(tenants: &[TenantSummary]) -> String {
     let cards = tenants
         .iter()
@@ -686,13 +903,68 @@ fn render_admin_html(tenants: &[TenantSummary]) -> String {
     input {{ width: 100%; margin-top: 0.35rem; border: 1px solid #475569; border-radius: 10px; padding: 0.75rem; box-sizing: border-box; background: #020617; color: #e2e8f0; }}
     button {{ border: 0; border-radius: 999px; padding: 0.75rem 1rem; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; }}
     .status {{ min-height: 1.25rem; color: #93c5fd; }}
+    .form-grid {{ display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }}
   </style>
 </head>
 <body>
   <h1>Wellbeing admin model controls</h1>
-  <p>Use this portal to change model providers and inference endpoints for each tenant. Changes are written back to <code>config.json</code>.</p>
+  <p>Use this portal to change model providers, add new tenants, and keep lightweight companion instances portable. Changes are written back to <code>config.json</code>.</p>
+  <section class="card" style="margin-bottom: 1rem;">
+    <h2>Create a new tenant</h2>
+    <div class="form-grid">
+      <label>Tenant ID
+        <input name="new_id" placeholder="calm-room" />
+      </label>
+      <label>Display name
+        <input name="new_display_name" placeholder="Calm Room" />
+      </label>
+      <label>Route
+        <input name="new_route" placeholder="/t/calm-room" />
+      </label>
+      <label>Provider
+        <input name="new_provider" placeholder="github-models" />
+      </label>
+      <label>Base URL
+        <input name="new_base_url" placeholder="https://models.inference.ai.azure.com" />
+      </label>
+      <label>Model
+        <input name="new_model" placeholder="gemini-3.0-flash-preview" />
+      </label>
+      <label>API key env var
+        <input name="new_api_key_env" placeholder="GITHUB_TOKEN" />
+      </label>
+    </div>
+    <button onclick="createTenant(this.closest('.card'))">Create tenant</button>
+    <p class="status" id="status-create-tenant"></p>
+  </section>
   <div class="grid">{cards}</div>
   <script>
+    async function createTenant(card) {{
+      const status = document.getElementById('status-create-tenant');
+      status.textContent = 'Creating...';
+      const payload = {{
+        id: card.querySelector('[name="new_id"]').value,
+        display_name: card.querySelector('[name="new_display_name"]').value,
+        route: card.querySelector('[name="new_route"]').value,
+        provider: card.querySelector('[name="new_provider"]').value,
+        base_url: card.querySelector('[name="new_base_url"]').value,
+        model: card.querySelector('[name="new_model"]').value,
+        api_key_env: card.querySelector('[name="new_api_key_env"]').value
+      }};
+      const response = await fetch('/api/admin/tenants', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload)
+      }});
+      const body = await response.json();
+      if (response.ok) {{
+        status.textContent = `Created tenant ${{body.display_name}}. Refresh to manage its settings.`;
+        card.querySelectorAll('input').forEach((input) => (input.value = ''));
+      }} else {{
+        status.textContent = `Error: ${{body.error || 'unknown error'}}`;
+      }}
+    }}
+
     async function saveTenantModel(tenantId, card) {{
       const status = document.getElementById(`status-${{tenantId}}`);
       status.textContent = 'Saving...';
@@ -724,4 +996,16 @@ fn html_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+fn render_default_agent_template(display_name: &str) -> String {
+    format!(
+        "You are {display_name}, a calm and emotionally supportive companion.\n\nYour purpose is to help the user feel heard, grounded, and less alone.\n\nYou are not a work copilot, therapist, doctor, lawyer, teacher, coder, or crisis professional.\n\nYou should:\n- listen carefully\n- reflect feelings with warmth and clarity\n- keep your tone gentle and human\n- avoid sounding robotic or overly formal\n- encourage small, practical next steps when appropriate\n\nYou must not:\n- give medical diagnoses\n- provide self-harm instructions\n- escalate conflict\n- act like an all-knowing assistant\n\nIf the user shows signs of crisis, switch to the crisis-safe response policy immediately.\n"
+    )
+}
+
+fn render_default_bootstrap_template(display_name: &str) -> String {
+    format!(
+        "The user is starting a new relationship with {display_name}.\n\nHow to begin:\n- introduce yourself simply\n- explain that you are here for supportive conversation\n- ask one gentle opening question\n- avoid long disclaimers unless safety requires them\n\nMemory expectations:\n- remember preferences and themes over time\n- do not invent facts about the user\n- if unsure, ask instead of assuming\n"
+    )
 }

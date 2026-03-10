@@ -2,7 +2,8 @@
 
 const App = (() => {
   const state = {
-    account: null
+    account: null,
+    tenants: []
   };
 
   function $(sel, ctx = document) {
@@ -61,10 +62,74 @@ const App = (() => {
     return body;
   }
 
+  function queryTenantId() {
+    return optionalValue(new URLSearchParams(window.location.search).get('tenant'));
+  }
+
+  function currentTenantId() {
+    return queryTenantId() || optionalValue(window.localStorage.getItem('wb_tenant_id'));
+  }
+
+  function rememberTenantId(value) {
+    const tenantId = optionalValue(value);
+    if (tenantId) {
+      window.localStorage.setItem('wb_tenant_id', tenantId);
+    }
+  }
+
+  async function loadTenants() {
+    if (state.tenants.length > 0) {
+      return state.tenants;
+    }
+
+    try {
+      state.tenants = await api('/tenants');
+    } catch (error) {
+      state.tenants = [];
+    }
+    return state.tenants;
+  }
+
+  async function initTenantSelectors() {
+    const selects = $$('[data-tenant-select]');
+    if (!selects.length) return;
+
+    const tenants = await loadTenants();
+    if (!tenants.length) return;
+
+    const selectedTenantId = currentTenantId() || tenants[0].id;
+    selects.forEach((select) => {
+      select.innerHTML = '';
+      tenants.forEach((tenant) => {
+        const option = document.createElement('option');
+        option.value = tenant.id;
+        option.textContent = tenant.display_name;
+        option.selected = tenant.id === selectedTenantId;
+        select.appendChild(option);
+      });
+      rememberTenantId(select.value);
+      on(select, 'change', () => rememberTenantId(select.value));
+    });
+  }
+
+  function syncTenantLinks() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return;
+
+    $$('[data-tenant-link]').forEach((link) => {
+      const url = new URL(link.getAttribute('href'), window.location.origin);
+      url.searchParams.set('tenant', tenantId);
+      const hash = url.hash;
+      const search = url.searchParams.toString();
+      link.setAttribute('href', `${url.pathname}${search ? `?${search}` : ''}${hash}`);
+    });
+  }
+
   async function loadSession() {
     try {
       const data = await api('/api/auth/me');
       state.account = data.account;
+      rememberTenantId(data.account.tenant_id);
       applyAccountChrome(state.account);
       return data.account;
     } catch (error) {
@@ -230,6 +295,7 @@ const App = (() => {
     const data = Object.fromEntries(new FormData(form).entries());
     const frequency = data.checkin_frequency || 'never';
     const checkinsEnabled = frequency !== 'never';
+    const personalInferenceEnabled = Boolean($('[name="personal_inference_enabled"]', form)?.checked);
 
     return {
       companion_name: data.bot_name || 'Hope',
@@ -244,6 +310,13 @@ const App = (() => {
       checkin_style: optionalValue(data.checkin_style),
       telegram_bot_token: optionalValue(data.telegram_token),
       telegram_bot_username: optionalValue(data.telegram_username),
+      personal_inference_enabled: personalInferenceEnabled,
+      personal_inference_model: personalInferenceEnabled
+        ? (optionalValue(data.personal_inference_model) || 'gemini-2.5-flash')
+        : null,
+      personal_inference_api_key: personalInferenceEnabled
+        ? optionalValue(data.personal_inference_api_key)
+        : null,
       onboarding_complete: true,
       checkins_enabled: checkinsEnabled,
       timezone: optionalValue(data.timezone) || browserTimezone(),
@@ -272,12 +345,51 @@ const App = (() => {
     setValue(form, 'timezone', profile.timezone || browserTimezone());
     setValue(form, 'telegram_token', profile.telegram_bot_token);
     setValue(form, 'telegram_username', profile.telegram_bot_username);
+    setValue(form, 'personal_inference_model', profile.personal_inference_model || 'gemini-2.5-flash');
+    const inferenceToggle = $('[name="personal_inference_enabled"]', form);
+    if (inferenceToggle) {
+      inferenceToggle.checked = Boolean(profile.personal_inference_enabled);
+    }
+    const keyField = $('[name="personal_inference_api_key"]', form);
+    if (keyField) {
+      keyField.value = '';
+    }
+    updatePersonalInferenceStatus(form, profile);
   }
 
   function setValue(form, name, value) {
     const input = $(`[name="${name}"]`, form);
     if (!input || value == null) return;
     input.value = value;
+  }
+
+  function updatePersonalInferenceStatus(form, profile = {}) {
+    const enabled = Boolean($('[name="personal_inference_enabled"]', form)?.checked);
+    const configured = Boolean(profile.personal_inference_api_key_configured);
+    const modelInput = $('[name="personal_inference_model"]', form);
+    const keyInput = $('[name="personal_inference_api_key"]', form);
+    const status = $('[data-personal-key-status]', form);
+
+    [modelInput, keyInput].forEach((input) => {
+      if (input) input.disabled = !enabled;
+    });
+
+    if (!status) return;
+    if (!enabled) {
+      status.textContent = 'Leave this off to keep using the shared default model.';
+      return;
+    }
+
+    status.textContent = configured
+      ? 'A Gemini key is already stored securely. Leave the key field blank to keep it, or paste a new one to rotate it.'
+      : 'If you add a Gemini key, it will be encrypted before it is stored.';
+  }
+
+  function initPersonalInferenceControls(form, profile = {}) {
+    const toggle = $('[name="personal_inference_enabled"]', form);
+    if (!toggle) return;
+    updatePersonalInferenceStatus(form, profile);
+    on(toggle, 'change', () => updatePersonalInferenceStatus(form, profile));
   }
 
   async function requireSession(options = {}) {
@@ -313,10 +425,12 @@ const App = (() => {
             method: 'POST',
             body: JSON.stringify({
               email: form.get('email'),
-              password: form.get('password')
+              password: form.get('password'),
+              tenant_id: optionalValue(form.get('tenant_id')) || currentTenantId()
             })
           });
           state.account = response.account;
+          rememberTenantId(response.account.tenant_id);
           toast('Signed in');
           window.location.href = response.account.profile.onboarding_complete ? '/chat.html' : '/onboarding.html';
         } catch (error) {
@@ -334,10 +448,12 @@ const App = (() => {
             method: 'POST',
             body: JSON.stringify({
               email: form.get('email'),
-              password: form.get('password')
+              password: form.get('password'),
+              tenant_id: optionalValue(form.get('tenant_id')) || currentTenantId()
             })
           });
           state.account = response.account;
+          rememberTenantId(response.account.tenant_id);
           toast('Account created');
           window.location.href = '/onboarding.html';
         } catch (error) {
@@ -354,6 +470,7 @@ const App = (() => {
     const account = await requireSession();
     if (!account) return;
     fillProfileForm(form, account.profile);
+    initPersonalInferenceControls(form, account.profile);
     initStepper();
 
     on(form, 'submit', async (event) => {
@@ -364,6 +481,7 @@ const App = (() => {
           body: JSON.stringify(buildProfilePayload(form))
         });
         state.account.profile = profile.profile;
+        rememberTenantId(state.account.tenant_id);
         toast('You’re all set');
         window.location.href = '/chat.html';
       } catch (error) {
@@ -379,6 +497,7 @@ const App = (() => {
     const account = await requireSession();
     if (!account) return;
     fillProfileForm(form, account.profile);
+    initPersonalInferenceControls(form, account.profile);
 
     on(form, 'submit', async (event) => {
       event.preventDefault();
@@ -388,6 +507,8 @@ const App = (() => {
           body: JSON.stringify(buildProfilePayload(form))
         });
         state.account.profile = profile.profile;
+        fillProfileForm(form, profile.profile);
+        initPersonalInferenceControls(form, profile.profile);
         applyAccountChrome(state.account);
         toast('Settings saved');
       } catch (error) {
@@ -543,6 +664,8 @@ const App = (() => {
   }
 
   async function init() {
+    await initTenantSelectors();
+    syncTenantLinks();
     populateTimezoneSelects();
     $$('.tabs').forEach((tabs) => initTabs(tabs.parentElement));
     initModals();

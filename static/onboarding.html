@@ -208,6 +208,27 @@
 
           <hr class="divider" />
 
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:0.65rem;">
+              <input type="checkbox" name="personal_inference_enabled" />
+              Use my own Gemini API key
+            </label>
+            <p class="hint">Optional. This sends your chat requests directly to Google using your own Gemini key instead of the shared default model.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="personal_inference_model">Gemini model</label>
+            <input type="text" id="personal_inference_model" name="personal_inference_model" placeholder="gemini-2.5-flash" autocomplete="off" />
+          </div>
+
+          <div class="form-group">
+            <label for="personal_inference_api_key">Gemini API key</label>
+            <input type="password" id="personal_inference_api_key" name="personal_inference_api_key" placeholder="AIza..." autocomplete="off" />
+            <p class="hint" data-personal-key-status>Your key is optional. If you add one, it will be encrypted before it is stored.</p>
+          </div>
+
+          <hr class="divider" />
+
           <div class="text-center">
             <div class="breathe-orb" style="width:48px;height:48px;margin-bottom:var(--space-md);"></div>
             <p class="text-secondary" style="font-size:0.95rem;">

@@ -127,6 +127,29 @@
           </div>
         </section>
 
+        <section class="settings-section" aria-labelledby="settings-inference">
+          <h2 id="settings-inference">Personal model settings</h2>
+          <p>Optionally bring your own Gemini key so your chats go directly through your own Google inference quota.</p>
+          <div class="card">
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:0.65rem;">
+                <input type="checkbox" id="s-personal_inference_enabled" name="personal_inference_enabled" />
+                Use my own Gemini API key
+              </label>
+              <p class="hint">Leave this off to keep using the shared default model configured by the admin.</p>
+            </div>
+            <div class="form-group">
+              <label for="s-personal_inference_model">Gemini model</label>
+              <input type="text" id="s-personal_inference_model" name="personal_inference_model" placeholder="gemini-2.5-flash" autocomplete="off" />
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="s-personal_inference_api_key">Gemini API key</label>
+              <input type="password" id="s-personal_inference_api_key" name="personal_inference_api_key" placeholder="Paste a new Gemini key to save or rotate it" autocomplete="off" />
+              <p class="hint" data-personal-key-status>A saved key can stay in place even if you leave this field blank.</p>
+            </div>
+          </div>
+        </section>
+
         <!-- Telegram -->
         <section class="settings-section" aria-labelledby="settings-telegram">
           <h2 id="settings-telegram">Telegram connection</h2>
