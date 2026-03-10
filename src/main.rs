@@ -11,6 +11,7 @@ mod provider;
 mod secrets;
 mod tenant;
 mod telegram;
+mod whisper;
 
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -43,6 +44,7 @@ async fn main() -> Result<()> {
     let bind_addr = config.bind_addr.clone();
     let checkins = config.checkins.clone();
     let telegram = config.telegram.clone();
+    let whisper = config.whisper.clone();
     let database_path = resolve_runtime_path(&project_root, &config.database.path);
     let heartbeat = config.heartbeat.clone();
     let web_root = project_root.join("static");
@@ -57,7 +59,7 @@ async fn main() -> Result<()> {
     let state = AppState::new(config_path.clone(), config, tenants, database.clone(), web_root);
     heartbeat::spawn_heartbeat(heartbeat, state.tenant_count().await);
     checkins::spawn_checkin_scheduler(database.clone(), state.http_client(), telegram.clone(), checkins);
-    telegram::spawn_gateway(state.clone(), telegram);
+    telegram::spawn_gateway(state.clone(), telegram, whisper);
 
     let app = app::router(state);
     let addr: SocketAddr = bind_addr

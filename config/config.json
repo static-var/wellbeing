@@ -13,8 +13,8 @@
     "api_base_url": "https://api.telegram.org"
   },
   "whisper": {
-    "worker_url": "http://127.0.0.1:9000",
-    "model": "base.en",
+    "worker_url": "http://127.0.0.1:2022/v1",
+    "model": "whisper-1",
     "timeout_secs": 30
   },
   "tenants": [

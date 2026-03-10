@@ -6,17 +6,18 @@ use tracing::{info, warn};
 use crate::{
     app::AppState,
     companion,
-    config::TelegramRuntimeConfig,
+    config::{TelegramRuntimeConfig, WhisperConfig},
     database::TelegramBotRecord,
     error::{AppError, Result},
+    whisper,
 };
 
-pub fn spawn_gateway(state: AppState, config: TelegramRuntimeConfig) {
+pub fn spawn_gateway(state: AppState, config: TelegramRuntimeConfig, whisper_config: WhisperConfig) {
     tokio::spawn(async move {
         let interval = Duration::from_secs(config.poll_interval_secs.max(1));
 
         loop {
-            if let Err(error) = run_poll_cycle(&state, &config).await {
+            if let Err(error) = run_poll_cycle(&state, &config, &whisper_config).await {
                 warn!("telegram gateway tick failed: {error}");
             }
 
@@ -60,14 +61,18 @@ pub async fn send_text_message(
     }
 }
 
-async fn run_poll_cycle(state: &AppState, config: &TelegramRuntimeConfig) -> Result<()> {
+async fn run_poll_cycle(
+    state: &AppState,
+    config: &TelegramRuntimeConfig,
+    whisper_config: &WhisperConfig,
+) -> Result<()> {
     let bots = state.database().list_active_telegram_bots()?;
     if bots.is_empty() {
         return Ok(());
     }
 
     for bot in bots {
-        if let Err(error) = poll_bot(state, config, &bot).await {
+        if let Err(error) = poll_bot(state, config, whisper_config, &bot).await {
             warn!(
                 account_id = bot.account_id,
                 tenant_id = %bot.tenant_id,
@@ -83,6 +88,7 @@ async fn run_poll_cycle(state: &AppState, config: &TelegramRuntimeConfig) -> Res
 async fn poll_bot(
     state: &AppState,
     config: &TelegramRuntimeConfig,
+    whisper_config: &WhisperConfig,
     bot: &TelegramBotRecord,
 ) -> Result<()> {
     let database = state.database();
@@ -97,7 +103,7 @@ async fn poll_bot(
         next_offset = next_offset.max(update.update_id + 1);
 
         if let Some(message) = update.message {
-            process_message(state, config, bot, message).await?;
+            process_message(state, config, whisper_config, bot, message).await?;
         }
     }
 
@@ -108,6 +114,7 @@ async fn poll_bot(
 async fn process_message(
     state: &AppState,
     config: &TelegramRuntimeConfig,
+    whisper_config: &WhisperConfig,
     bot: &TelegramBotRecord,
     message: TelegramMessage,
 ) -> Result<()> {
@@ -149,8 +156,45 @@ async fn process_message(
             .await?
             .content
         }
-    } else if message.voice.is_some() {
-        "I can see your voice note came through, but audio-note support isn't wired up yet. For now, send me a text message here and I'll reply.".to_string()
+    } else if let Some(voice) = message.voice.as_ref() {
+        match transcribe_voice_message(
+            &state.http_client(),
+            config,
+            whisper_config,
+            &bot.bot_token,
+            voice,
+        )
+        .await
+        {
+            Ok(transcript) => {
+                let tenant = state
+                    .tenant(&account.tenant_id)
+                    .await
+                    .ok_or_else(|| {
+                        AppError::InvalidState(
+                            "tenant not found for telegram account".to_string(),
+                        )
+                    })?;
+                companion::respond_to_user_message(
+                    state.database().as_ref(),
+                    &state.http_client(),
+                    &tenant,
+                    &account,
+                    &transcript,
+                )
+                .await?
+                .content
+            }
+            Err(error) => {
+                warn!(
+                    account_id = account.id,
+                    tenant_id = %account.tenant_id,
+                    error = %error,
+                    "voice-note transcription failed"
+                );
+                "I couldn't transcribe that voice note right now. Please make sure your whisper.cpp server is running and that `whisper.worker_url` points to it, then try again.".to_string()
+            }
+        }
     } else {
         "I can help best with text messages right now. Send me a short message and I'll reply here.".to_string()
     };
@@ -170,6 +214,27 @@ async fn process_message(
         "telegram message processed"
     );
     Ok(())
+}
+
+async fn transcribe_voice_message(
+    client: &reqwest::Client,
+    telegram_config: &TelegramRuntimeConfig,
+    whisper_config: &WhisperConfig,
+    bot_token: &str,
+    voice: &TelegramVoice,
+) -> Result<String> {
+    let file_path = get_file_path(client, telegram_config, bot_token, &voice.file_id).await?;
+    let bytes = download_telegram_file(client, telegram_config, bot_token, &file_path).await?;
+    let file_name = file_path
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("voice.ogg");
+    let mime_type = voice
+        .mime_type
+        .as_deref()
+        .unwrap_or("audio/ogg");
+    whisper::transcribe_audio_bytes(client, whisper_config, file_name, mime_type, bytes).await
 }
 
 fn build_start_message(account: &crate::database::AuthenticatedAccount) -> String {
@@ -243,6 +308,11 @@ struct SendMessageRequest {
     text: String,
 }
 
+#[derive(Debug, Serialize)]
+struct GetFileRequest {
+    file_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct TelegramEnvelope<T> {
     ok: bool,
@@ -284,4 +354,63 @@ struct TelegramUser {
 }
 
 #[derive(Debug, Deserialize)]
-struct TelegramVoice {}
+struct TelegramVoice {
+    file_id: String,
+    #[serde(default)]
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramFile {
+    file_path: String,
+}
+
+async fn get_file_path(
+    client: &reqwest::Client,
+    config: &TelegramRuntimeConfig,
+    bot_token: &str,
+    file_id: &str,
+) -> Result<String> {
+    let url = format!(
+        "{}/bot{}/getFile",
+        config.api_base_url.trim_end_matches('/'),
+        bot_token
+    );
+
+    let response = client
+        .post(url)
+        .json(&GetFileRequest {
+            file_id: file_id.to_string(),
+        })
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let envelope = response.json::<TelegramEnvelope<TelegramFile>>().await?;
+    if envelope.ok {
+        Ok(envelope.result.file_path)
+    } else {
+        Err(AppError::InvalidState(
+            envelope
+                .description
+                .unwrap_or_else(|| "telegram getFile failed".to_string()),
+        ))
+    }
+}
+
+async fn download_telegram_file(
+    client: &reqwest::Client,
+    config: &TelegramRuntimeConfig,
+    bot_token: &str,
+    file_path: &str,
+) -> Result<Vec<u8>> {
+    let url = format!(
+        "{}/file/bot{}/{}",
+        config.api_base_url.trim_end_matches('/'),
+        bot_token,
+        file_path.trim_start_matches('/')
+    );
+
+    let response = client.get(url).send().await?.error_for_status()?;
+    Ok(response.bytes().await?.to_vec())
+}

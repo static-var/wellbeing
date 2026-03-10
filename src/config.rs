@@ -335,7 +335,7 @@ fn default_telegram_api_base_url() -> String {
 }
 
 fn default_whisper_worker_url() -> String {
-    "http://127.0.0.1:9000".to_string()
+    "http://127.0.0.1:2022/v1".to_string()
 }
 
 fn default_whisper_timeout_secs() -> u64 {
