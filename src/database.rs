@@ -7,7 +7,10 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, Result};
+use crate::{
+    error::{AppError, Result},
+    secrets,
+};
 
 #[derive(Clone, Debug)]
 pub struct AppDatabase {
@@ -43,6 +46,9 @@ pub struct ProfileRecord {
     pub checkin_style: Option<String>,
     pub telegram_bot_token: Option<String>,
     pub telegram_bot_username: Option<String>,
+    pub personal_inference_enabled: bool,
+    pub personal_inference_model: Option<String>,
+    pub personal_inference_api_key_configured: bool,
     pub onboarding_complete: bool,
     pub checkins_enabled: bool,
     pub timezone: String,
@@ -74,6 +80,9 @@ pub struct UpsertProfileInput {
     pub checkin_style: Option<String>,
     pub telegram_bot_token: Option<String>,
     pub telegram_bot_username: Option<String>,
+    pub personal_inference_enabled: bool,
+    pub personal_inference_model: Option<String>,
+    pub personal_inference_api_key: Option<String>,
     pub onboarding_complete: bool,
     pub checkins_enabled: bool,
     pub timezone: String,
@@ -169,16 +178,20 @@ impl AppDatabase {
             .ok_or_else(|| AppError::InvalidState("new account was not readable".to_string()))
     }
 
-    pub fn find_account_by_email(&self, email: &str) -> Result<Option<AccountRecord>> {
+    pub fn find_account_by_email_in_tenant(
+        &self,
+        tenant_id: &str,
+        email: &str,
+    ) -> Result<Option<AccountRecord>> {
         let connection = self.connect()?;
         connection
             .query_row(
                 r#"
                 SELECT id, tenant_id, email, password_hash
                 FROM accounts
-                WHERE email = ?1 AND deleted_at IS NULL
+                WHERE tenant_id = ?1 AND email = ?2 AND deleted_at IS NULL
                 "#,
-                params![email],
+                params![tenant_id, email],
                 |row| {
                     Ok(AccountRecord {
                         id: row.get(0)?,
@@ -270,6 +283,9 @@ impl AppDatabase {
                     p.checkin_style,
                     p.telegram_bot_token,
                     p.telegram_bot_username,
+                    p.personal_inference_enabled,
+                    p.personal_inference_model,
+                    p.personal_inference_api_key_encrypted,
                     p.onboarding_complete,
                     p.checkins_enabled,
                     p.timezone,
@@ -321,6 +337,22 @@ impl AppDatabase {
         } else {
             None
         };
+        let existing_encrypted_key: Option<String> = connection
+            .query_row(
+                "SELECT personal_inference_api_key_encrypted FROM profiles WHERE account_id = ?1",
+                params![account_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        let personal_inference_api_key_encrypted = if input.personal_inference_enabled {
+            match normalize_optional(&input.personal_inference_api_key) {
+                Some(api_key) => Some(secrets::encrypt_user_secret(&api_key)?),
+                None => existing_encrypted_key,
+            }
+        } else {
+            None
+        };
 
         connection.execute(
             r#"
@@ -337,15 +369,18 @@ impl AppDatabase {
                 checkin_style = ?10,
                 telegram_bot_token = ?11,
                 telegram_bot_username = ?12,
-                onboarding_complete = ?13,
-                checkins_enabled = ?14,
-                timezone = ?15,
-                checkin_local_time = ?16,
-                checkin_days_json = ?17,
-                quiet_hours_json = ?18,
-                next_checkin_at = ?19,
-                updated_at = ?20
-            WHERE account_id = ?21
+                personal_inference_enabled = ?13,
+                personal_inference_model = ?14,
+                personal_inference_api_key_encrypted = ?15,
+                onboarding_complete = ?16,
+                checkins_enabled = ?17,
+                timezone = ?18,
+                checkin_local_time = ?19,
+                checkin_days_json = ?20,
+                quiet_hours_json = ?21,
+                next_checkin_at = ?22,
+                updated_at = ?23
+            WHERE account_id = ?24
             "#,
             params![
                 input.companion_name.trim(),
@@ -360,6 +395,9 @@ impl AppDatabase {
                 normalize_optional(&input.checkin_style),
                 normalize_optional(&input.telegram_bot_token),
                 normalize_optional(&input.telegram_bot_username),
+                bool_to_i64(input.personal_inference_enabled),
+                normalize_optional(&input.personal_inference_model),
+                personal_inference_api_key_encrypted,
                 bool_to_i64(input.onboarding_complete),
                 bool_to_i64(input.checkins_enabled),
                 input.timezone.trim(),
@@ -409,6 +447,56 @@ impl AppDatabase {
         Ok(messages)
     }
 
+    pub fn latest_memory_summary(&self, account_id: i64) -> Result<Option<String>> {
+        let connection = self.connect()?;
+        connection
+            .query_row(
+                r#"
+                SELECT summary
+                FROM memory_summaries
+                WHERE account_id = ?1
+                ORDER BY id DESC
+                LIMIT 1
+                "#,
+                params![account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn append_memory_summary(&self, account_id: i64, summary: &str) -> Result<()> {
+        let connection = self.connect()?;
+        connection.execute(
+            r#"
+            INSERT INTO memory_summaries (account_id, summary, created_at)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![account_id, summary.trim(), Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn personal_inference_api_key(&self, account_id: i64) -> Result<Option<String>> {
+        let connection = self.connect()?;
+        let encrypted: Option<String> = connection
+            .query_row(
+                r#"
+                SELECT personal_inference_api_key_encrypted
+                FROM profiles
+                WHERE account_id = ?1
+                "#,
+                params![account_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+
+        encrypted
+            .map(|value| secrets::decrypt_user_secret(&value))
+            .transpose()
+    }
+
     pub fn append_chat_message(&self, account_id: i64, role: &str, content: &str) -> Result<()> {
         let connection = self.connect()?;
         let now = Utc::now().to_rfc3339();
@@ -456,6 +544,9 @@ impl AppDatabase {
                 checkin_style = NULL,
                 telegram_bot_token = NULL,
                 telegram_bot_username = NULL,
+                personal_inference_enabled = 0,
+                personal_inference_model = NULL,
+                personal_inference_api_key_encrypted = NULL,
                 onboarding_complete = 0,
                 checkins_enabled = 0,
                 timezone = 'UTC',
@@ -780,6 +871,9 @@ impl AppDatabase {
                 checkin_style TEXT,
                 telegram_bot_token TEXT,
                 telegram_bot_username TEXT,
+                personal_inference_enabled INTEGER NOT NULL DEFAULT 0,
+                personal_inference_model TEXT,
+                personal_inference_api_key_encrypted TEXT,
                 onboarding_complete INTEGER NOT NULL DEFAULT 0,
                 checkins_enabled INTEGER NOT NULL DEFAULT 0,
                 timezone TEXT NOT NULL DEFAULT 'UTC',
@@ -842,13 +936,25 @@ impl AppDatabase {
         ensure_profile_column(&connection, "companion_tone", "TEXT")?;
         ensure_profile_column(&connection, "checkin_frequency", "TEXT")?;
         ensure_profile_column(&connection, "checkin_style", "TEXT")?;
+        ensure_profile_column(
+            &connection,
+            "personal_inference_enabled",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_profile_column(&connection, "personal_inference_model", "TEXT")?;
+        ensure_profile_column(
+            &connection,
+            "personal_inference_api_key_encrypted",
+            "TEXT",
+        )?;
         Ok(())
     }
 }
 
 fn map_account_with_profile(row: &rusqlite::Row<'_>) -> AuthenticatedAccount {
-    let checkin_days_json: String = row.get(20).unwrap_or_else(|_| "[]".to_string());
-    let quiet_hours_json: String = row.get(21).unwrap_or_else(|_| "[]".to_string());
+    let checkin_days_json: String = row.get(23).unwrap_or_else(|_| "[]".to_string());
+    let quiet_hours_json: String = row.get(24).unwrap_or_else(|_| "[]".to_string());
+    let encrypted_api_key: Option<String> = row.get(18).ok();
 
     AuthenticatedAccount {
         id: row.get(0).unwrap_or_default(),
@@ -868,14 +974,19 @@ fn map_account_with_profile(row: &rusqlite::Row<'_>) -> AuthenticatedAccount {
             checkin_style: row.get(13).ok(),
             telegram_bot_token: row.get(14).ok(),
             telegram_bot_username: row.get(15).ok(),
-            onboarding_complete: i64_to_bool(row.get::<_, i64>(16).unwrap_or(0)),
-            checkins_enabled: i64_to_bool(row.get::<_, i64>(17).unwrap_or(0)),
-            timezone: row.get(18).unwrap_or_else(|_| "UTC".to_string()),
-            checkin_local_time: row.get(19).unwrap_or_else(|_| "09:00".to_string()),
+            personal_inference_enabled: i64_to_bool(row.get::<_, i64>(16).unwrap_or(0)),
+            personal_inference_model: row.get(17).ok(),
+            personal_inference_api_key_configured: encrypted_api_key
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            onboarding_complete: i64_to_bool(row.get::<_, i64>(19).unwrap_or(0)),
+            checkins_enabled: i64_to_bool(row.get::<_, i64>(20).unwrap_or(0)),
+            timezone: row.get(21).unwrap_or_else(|_| "UTC".to_string()),
+            checkin_local_time: row.get(22).unwrap_or_else(|_| "09:00".to_string()),
             checkin_days: serde_json::from_str(&checkin_days_json).unwrap_or_default(),
             quiet_hours: serde_json::from_str(&quiet_hours_json).unwrap_or_default(),
-            last_active_at: row.get(22).ok(),
-            next_checkin_at: row.get(23).ok(),
+            last_active_at: row.get(25).ok(),
+            next_checkin_at: row.get(26).ok(),
         },
     }
 }

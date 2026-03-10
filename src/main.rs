@@ -8,6 +8,7 @@ mod auth;
 mod guardrails;
 mod heartbeat;
 mod provider;
+mod secrets;
 mod tenant;
 mod telegram;
 
