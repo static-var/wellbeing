@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Settings — Wellbeing</title>
+  <meta name="description" content="Manage your Wellbeing companion preferences and account." />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/" class="topbar-brand" aria-label="Wellbeing home">
+        <span class="brand-dot" aria-hidden="true"></span>
+        Wellbeing
+      </a>
+      <nav class="topbar-nav" aria-label="Main navigation">
+        <a href="/chat.html" class="topbar-link">Chat</a>
+        <a href="/settings.html" class="topbar-link active" aria-current="page">Settings</a>
+        <div class="topbar-avatar" aria-label="Your profile" title="Profile" id="avatar-btn">
+          <span aria-hidden="true">Y</span>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main style="padding:var(--space-2xl) var(--space-lg);min-height:calc(100vh - 53px);">
+    <div class="container--narrow">
+
+      <h1 style="font-size:1.6rem;margin-bottom:var(--space-xs);">Settings</h1>
+      <p class="text-secondary mb-xl">Adjust how your companion works for you. Changes are saved automatically.</p>
+
+      <form id="settings-form" novalidate>
+
+        <!-- About You -->
+        <section class="settings-section" aria-labelledby="settings-about">
+          <h2 id="settings-about">About you</h2>
+          <p>How your companion knows and greets you.</p>
+          <div class="card">
+            <div class="form-group">
+              <label for="s-user_name">Your name</label>
+              <input type="text" id="s-user_name" name="user_name" placeholder="What should your companion call you?" />
+            </div>
+            <div class="form-group">
+              <label for="s-pronouns">Pronouns</label>
+              <select id="s-pronouns" name="pronouns">
+                <option value="">Prefer not to say</option>
+                <option value="they/them">They / Them</option>
+                <option value="she/her">She / Her</option>
+                <option value="he/him">He / Him</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="s-goals">What you're hoping for</label>
+              <textarea id="s-goals" name="goals" rows="3" placeholder="What brings you to this space?"></textarea>
+              <p class="hint">Helps your companion understand how to support you best.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Companion -->
+        <section class="settings-section" aria-labelledby="settings-companion">
+          <h2 id="settings-companion">Your companion</h2>
+          <p>Personalize how your companion feels and behaves.</p>
+          <div class="card">
+            <div class="form-group">
+              <label for="s-bot_name">Companion name</label>
+              <input type="text" id="s-bot_name" name="bot_name" placeholder="e.g. Kira, Sol, Ember" />
+            </div>
+            <div class="form-group">
+              <label for="s-companion_tone">Personality</label>
+              <select id="s-companion_tone" name="companion_tone">
+                <option value="warm">Warm and encouraging</option>
+                <option value="gentle">Gentle and calm</option>
+                <option value="grounded">Grounded and straightforward</option>
+                <option value="playful">Lightly playful</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="s-boundaries">Boundaries</label>
+              <textarea id="s-boundaries" name="boundaries" rows="3" placeholder="Anything you'd like your companion to avoid?"></textarea>
+              <p class="hint">Your companion will always respect these.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Check-ins -->
+        <section class="settings-section" aria-labelledby="settings-checkins">
+          <h2 id="settings-checkins">Check-ins</h2>
+          <p>How and when your companion reaches out to you.</p>
+          <div class="card">
+            <div class="form-group">
+              <label for="s-checkin_frequency">Frequency</label>
+              <select id="s-checkin_frequency" name="checkin_frequency">
+                <option value="daily">Once a day</option>
+                <option value="few_times">A few times a week</option>
+                <option value="weekly">Once a week</option>
+                <option value="never">I'll reach out when I need to</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="s-checkin_time">Preferred time</label>
+              <select id="s-checkin_time" name="checkin_time">
+                <option value="morning">Morning</option>
+                <option value="afternoon">Afternoon</option>
+                <option value="evening">Evening</option>
+                <option value="anytime">No preference</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="s-checkin_style">Check-in style</label>
+              <select id="s-checkin_style" name="checkin_style">
+                <option value="open">Open-ended questions</option>
+                <option value="scale">Simple mood scale</option>
+                <option value="prompt">Thoughtful prompts</option>
+                <option value="mixed">A mix of all</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- Telegram -->
+        <section class="settings-section" aria-labelledby="settings-telegram">
+          <h2 id="settings-telegram">Telegram connection</h2>
+          <p>Optionally connect a Telegram bot to chat from there too.</p>
+          <div class="card">
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="s-telegram_token">Bot token</label>
+              <input type="text" id="s-telegram_token" name="telegram_token" placeholder="Paste your Telegram bot token" autocomplete="off" />
+              <p class="hint">
+                Get one from <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>. 
+                Leave blank to use web chat only.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Save -->
+        <div class="flex flex-between">
+          <a href="/chat.html" class="btn btn--ghost">← Back to chat</a>
+          <button type="submit" class="btn btn--primary">Save changes</button>
+        </div>
+      </form>
+
+      <hr class="divider" style="margin:var(--space-2xl) 0;" />
+
+      <!-- Danger Zone -->
+      <section aria-labelledby="settings-danger">
+        <div class="danger-zone">
+          <h3 id="settings-danger">Careful zone</h3>
+          <p>
+            These actions are significant. Resetting your companion clears its memory and personality.
+            Deleting your account removes everything permanently.
+          </p>
+          <div class="danger-actions">
+            <button type="button" class="btn btn--danger" id="btn-reset-bot">
+              Reset companion
+            </button>
+            <button type="button" class="btn btn--danger" id="btn-delete-account">
+              Delete my account &amp; data
+            </button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Reset Modal -->
+  <div class="modal-backdrop" id="modal-reset" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+    <div class="modal">
+      <h3 id="reset-title">Reset your companion?</h3>
+      <p>
+        This will clear your companion's memory and personality settings. 
+        It's like starting fresh — your companion won't remember previous conversations.
+      </p>
+      <p>Your account and preferences will be kept.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn--ghost" data-modal-close>Cancel</button>
+        <button type="button" class="btn btn--danger" id="confirm-reset">Yes, reset</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete Account Modal -->
+  <div class="modal-backdrop" id="modal-delete" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+    <div class="modal">
+      <h3 id="delete-title">Delete your account?</h3>
+      <p>
+        This will permanently delete your account, all conversations, preferences, and any connected services. 
+        This cannot be undone.
+      </p>
+      <p style="font-weight:500;color:var(--danger);">
+        All your data will be erased immediately.
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn--ghost" data-modal-close>Cancel</button>
+        <button type="button" class="btn btn--danger" id="confirm-delete">Delete everything</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <p>Wellbeing — your data, your control, always.</p>
+  </footer>
+
+  <script src="/js/app.js"></script>
+  <script>
+    // Set avatar initial from stored name
+    const name = localStorage.getItem('wb_user_name');
+    if (name) {
+      const av = document.getElementById('avatar-btn');
+      if (av) av.querySelector('span').textContent = name[0].toUpperCase();
+    }
+  </script>
+</body>
+</html>

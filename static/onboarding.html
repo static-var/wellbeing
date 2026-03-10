@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Set up your companion — Wellbeing</title>
+  <meta name="description" content="Personalize your Wellbeing companion in a few simple steps." />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/" class="topbar-brand" aria-label="Wellbeing home">
+        <span class="brand-dot" aria-hidden="true"></span>
+        Wellbeing
+      </a>
+    </div>
+  </header>
+
+  <main style="padding:var(--space-2xl) var(--space-lg);min-height:calc(100vh - 53px);">
+    <div class="container--narrow">
+
+      <h1 class="text-center" style="font-size:1.6rem;margin-bottom:var(--space-sm);">Let's set things up</h1>
+      <p class="text-center text-secondary mb-lg">
+        Just a few questions so your companion feels right for you.
+        Everything here is optional — skip anything you like.
+      </p>
+
+      <!-- Stepper dots -->
+      <div class="stepper" aria-label="Setup progress">
+        <div class="stepper-dot active" aria-label="Step 1"></div>
+        <div class="stepper-line" aria-hidden="true"></div>
+        <div class="stepper-dot" aria-label="Step 2"></div>
+        <div class="stepper-line" aria-hidden="true"></div>
+        <div class="stepper-dot" aria-label="Step 3"></div>
+        <div class="stepper-line" aria-hidden="true"></div>
+        <div class="stepper-dot" aria-label="Step 4"></div>
+        <div class="stepper-line" aria-hidden="true"></div>
+        <div class="stepper-dot" aria-label="Step 5"></div>
+      </div>
+
+      <form id="onboarding-form" novalidate>
+
+        <!-- Step 1: About You -->
+        <div class="step active card card--elevated">
+          <h2 style="font-size:1.3rem;">About you</h2>
+          <p class="text-secondary" style="font-size:0.9rem;">
+            This helps your companion greet you personally. Completely optional.
+          </p>
+          <hr class="divider" />
+
+          <div class="form-group">
+            <label for="user_name">What should your companion call you?</label>
+            <input type="text" id="user_name" name="user_name" placeholder="A name, nickname, or leave blank" autocomplete="given-name" />
+            <p class="hint">This is just so conversations feel more personal.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="pronouns">Your pronouns (optional)</label>
+            <select id="pronouns" name="pronouns">
+              <option value="">Prefer not to say</option>
+              <option value="they/them">They / Them</option>
+              <option value="she/her">She / Her</option>
+              <option value="he/him">He / Him</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          <div class="flex flex-between mt-lg">
+            <span></span>
+            <button type="button" class="btn btn--primary" data-step-next>Continue</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Name Your Companion -->
+        <div class="step card card--elevated">
+          <h2 style="font-size:1.3rem;">Your companion</h2>
+          <p class="text-secondary" style="font-size:0.9rem;">
+            Give your companion a name — something that feels warm and comfortable for you.
+          </p>
+          <hr class="divider" />
+
+          <div class="form-group">
+            <label for="bot_name">Companion name</label>
+            <input type="text" id="bot_name" name="bot_name" placeholder="e.g. Kira, Sol, Ember, or anything you like" value="Kira" />
+            <p class="hint">You can always change this later in settings.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="companion_tone">How should your companion feel?</label>
+            <select id="companion_tone" name="companion_tone">
+              <option value="warm">Warm and encouraging</option>
+              <option value="gentle">Gentle and calm</option>
+              <option value="grounded">Grounded and straightforward</option>
+              <option value="playful">Lightly playful</option>
+            </select>
+            <p class="hint">This shapes how your companion speaks with you.</p>
+          </div>
+
+          <div class="flex flex-between mt-lg">
+            <button type="button" class="btn btn--ghost" data-step-prev>Back</button>
+            <button type="button" class="btn btn--primary" data-step-next>Continue</button>
+          </div>
+        </div>
+
+        <!-- Step 3: What Brings You Here -->
+        <div class="step card card--elevated">
+          <h2 style="font-size:1.3rem;">What brings you here?</h2>
+          <p class="text-secondary" style="font-size:0.9rem;">
+            This helps your companion understand what matters to you. There are no wrong answers.
+          </p>
+          <hr class="divider" />
+
+          <div class="form-group">
+            <label for="goals">What are you hoping for from this space?</label>
+            <textarea id="goals" name="goals" rows="3" placeholder="e.g. I'd like someone to talk to when I feel stressed, or just a space to reflect on my day…"></textarea>
+            <p class="hint">Write as much or as little as you'd like. You can update this anytime.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="boundaries">Is there anything you'd like your companion to avoid?</label>
+            <textarea id="boundaries" name="boundaries" rows="3" placeholder="e.g. I'd prefer not to talk about work, or please don't give advice unless I ask…"></textarea>
+            <p class="hint">Setting boundaries is healthy. Your companion will respect them.</p>
+          </div>
+
+          <div class="flex flex-between mt-lg">
+            <button type="button" class="btn btn--ghost" data-step-prev>Back</button>
+            <button type="button" class="btn btn--primary" data-step-next>Continue</button>
+          </div>
+        </div>
+
+        <!-- Step 4: Check-in Preferences -->
+        <div class="step card card--elevated">
+          <h2 style="font-size:1.3rem;">Check-in preferences</h2>
+          <p class="text-secondary" style="font-size:0.9rem;">
+            Your companion can gently reach out to see how you're doing. You're always free to ignore check-ins.
+          </p>
+          <hr class="divider" />
+
+          <div class="form-group">
+            <label for="checkin_frequency">How often would you like check-ins?</label>
+            <select id="checkin_frequency" name="checkin_frequency">
+              <option value="daily">Once a day</option>
+              <option value="few_times">A few times a week</option>
+              <option value="weekly">Once a week</option>
+              <option value="never">I'll reach out when I need to</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="checkin_time">Preferred time of day</label>
+            <select id="checkin_time" name="checkin_time">
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+              <option value="evening" selected>Evening</option>
+              <option value="anytime">No preference</option>
+            </select>
+            <p class="hint">Check-ins are always gentle. You never have to respond.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="checkin_style">What kind of check-ins feel right?</label>
+            <select id="checkin_style" name="checkin_style">
+              <option value="open">Open-ended — "How are you feeling?"</option>
+              <option value="scale">Simple scale — rate your mood 1–5</option>
+              <option value="prompt">Thoughtful prompts — something to reflect on</option>
+              <option value="mixed" selected>A mix of all</option>
+            </select>
+          </div>
+
+          <div class="flex flex-between mt-lg">
+            <button type="button" class="btn btn--ghost" data-step-prev>Back</button>
+            <button type="button" class="btn btn--primary" data-step-next>Continue</button>
+          </div>
+        </div>
+
+        <!-- Step 5: Telegram & Finish -->
+        <div class="step card card--elevated">
+          <h2 style="font-size:1.3rem;">Connect via Telegram</h2>
+          <p class="text-secondary" style="font-size:0.9rem;">
+            Optionally connect a Telegram bot so your companion can reach you there too.
+            This is entirely optional — you can always use the web chat instead.
+          </p>
+          <hr class="divider" />
+
+          <div class="form-group">
+            <label for="telegram_token">Telegram bot token</label>
+            <input type="text" id="telegram_token" name="telegram_token" placeholder="Paste your bot token here (optional)" autocomplete="off" />
+            <p class="hint">
+              You can get one by talking to <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> on Telegram. 
+              Leave blank to skip.
+            </p>
+          </div>
+
+          <hr class="divider" />
+
+          <div class="text-center">
+            <div class="breathe-orb" style="width:48px;height:48px;margin-bottom:var(--space-md);"></div>
+            <p class="text-secondary" style="font-size:0.95rem;">
+              That's everything! You can change any of this later in settings.
+            </p>
+          </div>
+
+          <div class="flex flex-between mt-lg">
+            <button type="button" class="btn btn--ghost" data-step-prev>Back</button>
+            <button type="submit" class="btn btn--primary btn--lg">Start chatting</button>
+          </div>
+        </div>
+
+      </form>
+    </div>
+  </main>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
