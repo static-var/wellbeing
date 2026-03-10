@@ -129,14 +129,14 @@
 
         <section class="settings-section" aria-labelledby="settings-inference">
           <h2 id="settings-inference">Personal model settings</h2>
-          <p>Optionally use your own Gemini API key. If enabled, your chat requests go directly to Google under Google's own terms and privacy policy.</p>
+          <p>Wellbeing uses Gemini's OpenAI-compatible endpoint only. Add your own Gemini API key here if the operator has not already provided a shared Gemini key for this companion.</p>
           <div class="card">
             <div class="form-group">
               <label style="display:flex;align-items:center;gap:0.65rem;">
                 <input type="checkbox" id="s-personal_inference_enabled" name="personal_inference_enabled" />
                 Use my own Gemini API key
               </label>
-              <p class="hint">Leave this off to keep using the shared default model configured by the admin.</p>
+              <p class="hint">Leave this off only if this companion already has a shared Gemini key configured by the operator.</p>
             </div>
             <div class="form-group">
               <label for="s-personal_inference_model">Gemini model</label>

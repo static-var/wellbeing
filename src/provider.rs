@@ -7,6 +7,10 @@ use crate::{
     error::{AppError, Result},
 };
 
+pub const GEMINI_PROVIDER: &str = "gemini-openai";
+pub const GEMINI_OPENAI_BASE_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta/openai";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ProviderMessage {
     pub role: String,
@@ -57,9 +61,9 @@ impl ResolvedProviderConfig {
 
     pub fn gemini_personal(api_key: String, model: Option<String>) -> Self {
         Self {
-            provider: "gemini-openai".to_string(),
-            base_url: "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
-            model: model.unwrap_or_else(|| "gemini-3-flash-preview".to_string()),
+            provider: GEMINI_PROVIDER.to_string(),
+            base_url: GEMINI_OPENAI_BASE_URL.to_string(),
+            model: model.unwrap_or_else(|| "gemini-2.5-flash".to_string()),
             api_key: Some(api_key),
             api_key_env: None,
         }
@@ -72,12 +76,9 @@ pub async fn generate_reply(
     messages: Vec<ProviderMessage>,
 ) -> Result<String> {
     let provider = model.provider.trim().to_ascii_lowercase();
-    if !matches!(
-        provider.as_str(),
-        "github-models" | "openai-compatible" | "openai" | "gemini" | "gemini-openai"
-    ) {
+    if !matches!(provider.as_str(), "gemini" | "gemini-openai" | "openai-compatible") {
         return Err(AppError::InvalidConfig(format!(
-            "provider '{}' is not supported yet",
+            "provider '{}' is not supported; only Gemini's OpenAI-compatible endpoint is allowed",
             model.provider
         )));
     }
@@ -125,22 +126,16 @@ pub async fn generate_reply(
 }
 
 fn default_api_key_env(provider: &str) -> String {
-    match provider {
-        "gemini" | "gemini-openai" => "GEMINI_API_KEY".to_string(),
-        _ => "GITHUB_TOKEN".to_string(),
-    }
+    let _ = provider;
+    "GEMINI_API_KEY".to_string()
 }
 
 fn resolved_base_url(provider: &str, configured: &str) -> String {
-    let trimmed = configured.trim();
-    if !trimmed.is_empty() {
-        return trimmed.trim_end_matches('/').to_string();
+    let trimmed = configured.trim().trim_end_matches('/');
+    if !trimmed.is_empty() && trimmed != GEMINI_OPENAI_BASE_URL {
+        return GEMINI_OPENAI_BASE_URL.to_string();
     }
 
-    match provider {
-        "gemini" | "gemini-openai" => {
-            "https://generativelanguage.googleapis.com/v1beta/openai".to_string()
-        }
-        _ => "https://models.inference.ai.azure.com".to_string(),
-    }
+    let _ = provider;
+    GEMINI_OPENAI_BASE_URL.to_string()
 }

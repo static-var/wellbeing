@@ -26,10 +26,10 @@
       "bootstrap_path": "../templates/tenant/bootstrap.md",
       "memory_path": "../data/hope.sqlite",
       "model": {
-        "provider": "github-models",
-        "base_url": "https://models.inference.ai.azure.com",
-        "model": "gemini-3.0-flash-preview",
-        "api_key_env": "GITHUB_TOKEN"
+        "provider": "gemini-openai",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model": "gemini-2.5-flash",
+        "api_key_env": "GEMINI_API_KEY"
       },
       "proactive": {
         "gentle_checkins_enabled": true,

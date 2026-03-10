@@ -29,6 +29,7 @@ use crate::{
     },
     database::{AppDatabase, AuthenticatedAccount, ChatMessageRecord, ProfileRecord, UpsertProfileInput},
     error::AppError,
+    provider::{GEMINI_OPENAI_BASE_URL, GEMINI_PROVIDER},
     tenant::{TenantRuntime, TenantSummary},
 };
 
@@ -129,8 +130,6 @@ struct CreateTenantRequest {
     id: String,
     display_name: String,
     route: Option<String>,
-    provider: Option<String>,
-    base_url: Option<String>,
     model: Option<String>,
     api_key_env: Option<String>,
 }
@@ -567,14 +566,8 @@ async fn create_tenant(
         .ok_or_else(|| ApiError::internal("default tenant config missing".to_string()))?;
 
     let model = ModelConfig {
-        provider: request
-            .provider
-            .and_then(normalize_optional_string)
-            .unwrap_or_else(|| fallback_model.provider.clone()),
-        base_url: request
-            .base_url
-            .and_then(normalize_optional_string)
-            .unwrap_or_else(|| fallback_model.base_url.clone()),
+        provider: GEMINI_PROVIDER.to_string(),
+        base_url: GEMINI_OPENAI_BASE_URL.to_string(),
         model: request
             .model
             .and_then(normalize_optional_string)
@@ -582,7 +575,8 @@ async fn create_tenant(
         api_key_env: request
             .api_key_env
             .and_then(normalize_optional_string)
-            .or_else(|| fallback_model.api_key_env.clone()),
+            .or_else(|| fallback_model.api_key_env.clone())
+            .or_else(|| Some("GEMINI_API_KEY".to_string())),
     };
 
     let route = request
@@ -659,16 +653,31 @@ async fn update_tenant_model(
     State(state): State<AppState>,
     Json(request): Json<UpdateModelRequest>,
 ) -> Result<Json<TenantSummary>, ApiError> {
+    let provider = request.provider.trim().to_ascii_lowercase();
+    if !provider.is_empty()
+        && !matches!(provider.as_str(), "gemini" | "gemini-openai" | "openai-compatible")
+    {
+        return Err(ApiError::bad_request(
+            "only Gemini's OpenAI-compatible endpoint is supported".to_string(),
+        ));
+    }
+    let base_url = request.base_url.trim();
+    if !base_url.is_empty() && base_url.trim_end_matches('/') != GEMINI_OPENAI_BASE_URL {
+        return Err(ApiError::bad_request(
+            "base_url must point to Google's Gemini OpenAI-compatible endpoint".to_string(),
+        ));
+    }
+
     let model = ModelConfig {
-        provider: request.provider.trim().to_string(),
-        base_url: request.base_url.trim().to_string(),
+        provider: GEMINI_PROVIDER.to_string(),
+        base_url: GEMINI_OPENAI_BASE_URL.to_string(),
         model: request.model.trim().to_string(),
         api_key_env: request.api_key_env.and_then(normalize_optional_string),
     };
 
-    if model.provider.is_empty() || model.base_url.is_empty() || model.model.is_empty() {
+    if model.model.is_empty() {
         return Err(ApiError::bad_request(
-            "provider, base_url, and model are required".to_string(),
+            "model is required".to_string(),
         ));
     }
 
@@ -851,20 +860,10 @@ fn render_admin_html(tenants: &[TenantSummary]) -> String {
   <p><strong>Tenant ID:</strong> {tenant_id}</p>
   <p><strong>Gateways:</strong> {gateways}</p>
   <label>Provider
-    <input name="provider" value="{provider}" list="provider-options-{tenant_id}" />
+    <input name="provider" value="{provider}" readonly />
   </label>
-  <datalist id="provider-options-{tenant_id}">
-    <option value="github-models"></option>
-    <option value="openai-compatible"></option>
-    <option value="openai"></option>
-    <option value="anthropic"></option>
-    <option value="gemini"></option>
-    <option value="groq"></option>
-    <option value="ollama"></option>
-    <option value="llama.cpp"></option>
-  </datalist>
   <label>Inference base URL
-    <input name="base_url" value="{base_url}" />
+    <input name="base_url" value="{base_url}" readonly />
   </label>
   <label>Model
     <input name="model" value="{model}" />
@@ -914,7 +913,7 @@ fn render_admin_html(tenants: &[TenantSummary]) -> String {
 </head>
 <body>
   <h1>Wellbeing admin model controls</h1>
-  <p>Use this portal to change model providers, add new tenants, and keep lightweight companion instances portable. Changes are written back to <code>config.json</code>.</p>
+  <p>Use this portal to manage Gemini endpoint settings, add new tenants, and keep lightweight companion instances portable. Changes are written back to <code>config.json</code>.</p>
   <section class="card" style="margin-bottom: 1rem;">
     <h2>Create a new tenant</h2>
     <div class="form-grid">
@@ -928,16 +927,16 @@ fn render_admin_html(tenants: &[TenantSummary]) -> String {
         <input name="new_route" placeholder="/t/calm-room" />
       </label>
       <label>Provider
-        <input name="new_provider" placeholder="github-models" />
+        <input name="new_provider" value="gemini-openai" readonly />
       </label>
       <label>Base URL
-        <input name="new_base_url" placeholder="https://models.inference.ai.azure.com" />
+        <input name="new_base_url" value="https://generativelanguage.googleapis.com/v1beta/openai" readonly />
       </label>
       <label>Model
-        <input name="new_model" placeholder="gemini-3.0-flash-preview" />
+        <input name="new_model" placeholder="gemini-2.5-flash" />
       </label>
       <label>API key env var
-        <input name="new_api_key_env" placeholder="GITHUB_TOKEN" />
+        <input name="new_api_key_env" placeholder="GEMINI_API_KEY" />
       </label>
     </div>
     <button onclick="createTenant(this.closest('.card'))">Create tenant</button>

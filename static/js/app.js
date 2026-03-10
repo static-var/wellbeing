@@ -434,7 +434,7 @@ const App = (() => {
 
     if (!status) return;
     if (!enabled) {
-      status.textContent = 'Leave this off to keep using the shared default model.';
+      status.textContent = 'Leave this off only if this companion already has a shared Gemini key configured by the operator.';
       return;
     }
 
