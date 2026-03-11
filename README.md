@@ -180,23 +180,11 @@ Wellbeing is meant to stay lightweight:
 
 This makes it suitable for self-hosted deployments and for running multiple companion instances without building a heavy control plane first.
 
-## Design experiments
+## Web experience
 
-The current default landing page is still served at:
+The default landing page is served at:
 
 - `/`
-
-An alternate Gemini-generated A/B-test landing page is available at:
-
-- `/v2`
-- `/v2.html`
-
-Use that variant to compare design direction without replacing the default experience.
-
-A calmer, editorial V3 variant is also available at:
-
-- `/v3`
-- `/v3.html`
 
 ## Development docs
 

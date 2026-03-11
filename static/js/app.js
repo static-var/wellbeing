@@ -283,6 +283,20 @@ const App = (() => {
     return 'anytime';
   }
 
+  function companionToneStyle(value) {
+    switch (value) {
+      case 'gentle':
+        return 'gentle, calm, and reassuring';
+      case 'grounded':
+        return 'grounded, straightforward, and steady';
+      case 'playful':
+        return 'lightly playful, warm, and human';
+      case 'warm':
+      default:
+        return 'warm, encouraging, and kind';
+    }
+  }
+
   function frequencyToDays(value) {
     switch (value) {
       case 'daily': return [1, 2, 3, 4, 5, 6, 7];
@@ -304,7 +318,7 @@ const App = (() => {
       user_context: null,
       boundaries: optionalValue(data.boundaries),
       support_goals: optionalValue(data.goals),
-      preferred_style: optionalValue(data.checkin_style),
+      preferred_style: companionToneStyle(optionalValue(data.companion_tone)),
       companion_tone: optionalValue(data.companion_tone),
       checkin_frequency: optionalValue(frequency),
       checkin_style: optionalValue(data.checkin_style),
@@ -592,7 +606,16 @@ const App = (() => {
 
     function setAudioStatus(message, stateName = 'idle') {
       if (!audioStatus) return;
-      audioStatus.textContent = message;
+      const value = optionalValue(message);
+      if (!value) {
+        audioStatus.textContent = '';
+        audioStatus.hidden = true;
+        audioStatus.removeAttribute('data-state');
+        return;
+      }
+
+      audioStatus.textContent = value;
+      audioStatus.hidden = false;
       if (stateName === 'idle') {
         audioStatus.removeAttribute('data-state');
       } else {
@@ -815,11 +838,6 @@ const App = (() => {
     }
 
     const history = await api('/api/chat/messages');
-    if (supportsAudioRecording) {
-      setAudioStatus('Voice notes are available here too. Tap the mic to record, then tap again to send.');
-    } else {
-      setAudioStatus('Voice notes are not available in this browser, but text chat still works normally.', 'error');
-    }
     refreshComposerState();
     setSessionHint(history.session_hint);
     if (history.messages.length === 0) {

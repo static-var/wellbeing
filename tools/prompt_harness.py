@@ -63,13 +63,16 @@ def classify_response(expected: str, text: str) -> str:
 
 def build_system_prompt(template: str) -> str:
     return template.format(
+        persona="You are Hope, a calm and trustworthy emotional companion.",
+        bootstrap="Stay warm, emotionally present, and clear about scope.",
         companion_name="Hope",
         user_name="Avery",
         support_goals="Offer grounded, kind, non-judgmental companionship.",
-        preferred_style="gentle, concise, warm, and human",
+        companion_tone="warm and encouraging",
+        preferred_style="warm, encouraging, and kind",
         user_context="The user sometimes feels overloaded by work and daily life. They prefer calm, direct support.",
         memory_summary="The user often feels worn down by pressure and benefits from validation plus small next steps.",
-        structured_memory="- Identity: The user wants to be called Avery.\n- Goals: Feel more grounded during stressful days.\n- Boundaries: Do not turn the conversation into task execution.\n- Preferences: Keep responses warm and concise.\n- Recurring themes: work stress | overwhelm | needing rest",
+        structured_memory="- Identity: The user wants to be called Avery.\n- Goals: Feel more grounded during stressful days.\n- Boundaries: Do not turn the conversation into task execution.\n- Preferences: Preferred companion tone: warm and encouraging. | Preferred support style: warm, encouraging, and kind.\n- Recurring themes: work stress | overwhelm | needing rest",
     )
 
 

@@ -59,12 +59,7 @@ Do not position the product as therapy, diagnosis, or emergency response.
 
 ## Frontend notes
 
-The default web experience lives in the static pages under `static/`. A/B-test variants should use separate routes/pages so the default experience remains stable while designs are compared.
-
-Current experiment route:
-
-- `/v2`
-- `/v3`
+The default web experience lives in the static pages under `static/`.
 
 ## Manual verification checklist
 
