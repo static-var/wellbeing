@@ -59,6 +59,13 @@ Users can add their own Gemini API key during onboarding or in settings. When `W
 
 There is also an in-app setup guide at `/gemini-guide.html`.
 
+## Optional signup protection
+
+Wellbeing can protect signup with Cloudflare Turnstile.
+
+- Turnstile is controlled with `WELLBEING_TURNSTILE_SITE_KEY` and `WELLBEING_TURNSTILE_SECRET_KEY`
+- email verification is optional and stays off unless you also configure SES on purpose
+
 ## Development
 
 Useful commands:

@@ -1,14 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
-    env,
-    fs as stdfs,
+    env, fs as stdfs,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
 };
 
 use axum::{
-    extract::{Multipart, Path as AxumPath, State},
+    extract::{Multipart, Path as AxumPath, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{delete, get, post},
@@ -21,23 +20,28 @@ use serde::{Deserialize, Serialize};
 use tokio::{fs, sync::RwLock};
 
 use crate::{
-    auth,
-    companion,
+    auth, companion,
     config::{
-        AppConfig, GatewayBindings, ModelConfig, ProactiveConfig, TenantConfig,
-        TokenGatewayConfig, WebGatewayConfig,
+        AppConfig, GatewayBindings, ModelConfig, ProactiveConfig, TenantConfig, TokenGatewayConfig,
+        WebGatewayConfig,
     },
-    database::{AppDatabase, AuthenticatedAccount, ChatMessageRecord, ProfileRecord, UpsertProfileInput},
+    database::{
+        AppDatabase, AuthenticatedAccount, ChatMessageRecord, ConsumeEmailVerificationResult,
+        ProfileRecord, UpsertProfileInput,
+    },
+    email::EmailVerificationRuntime,
     error::AppError,
     guardrails,
     provider::{GEMINI_OPENAI_BASE_URL, GEMINI_PROVIDER},
     tenant::{TenantRuntime, TenantSummary},
+    turnstile::TurnstileRuntime,
     whisper,
 };
 
 const SESSION_COOKIE: &str = "wb_session";
 const SESSION_DAYS: i64 = 30;
 const MAX_AUDIO_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
+const EMAIL_VERIFICATION_HOURS: i64 = 24;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -45,6 +49,8 @@ pub struct AppState {
     database: Arc<AppDatabase>,
     web_root: PathBuf,
     http_client: reqwest::Client,
+    turnstile: TurnstileRuntime,
+    email_verification: EmailVerificationRuntime,
 }
 
 impl AppState {
@@ -54,12 +60,16 @@ impl AppState {
         tenants: Vec<TenantRuntime>,
         database: Arc<AppDatabase>,
         web_root: PathBuf,
+        turnstile: TurnstileRuntime,
+        email_verification: EmailVerificationRuntime,
     ) -> Self {
         Self {
             inner: Arc::new(RwLock::new(RuntimeState::new(config_path, config, tenants))),
             database,
             web_root,
             http_client: reqwest::Client::new(),
+            turnstile,
+            email_verification,
         }
     }
 
@@ -126,6 +136,18 @@ struct AuthRequest {
     email: String,
     password: String,
     tenant_id: Option<String>,
+    turnstile_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResendVerificationRequest {
+    email: String,
+    tenant_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifyEmailQuery {
+    token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +162,25 @@ struct CreateTenantRequest {
 #[derive(Debug, Serialize)]
 struct AuthEnvelope {
     account: AuthenticatedAccount,
+}
+
+#[derive(Debug, Serialize)]
+struct SignupEnvelope {
+    account: Option<AuthenticatedAccount>,
+    requires_email_verification: bool,
+    email: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AuthConfigEnvelope {
+    turnstile_site_key: Option<String>,
+    email_verification_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct MessageEnvelope {
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -188,7 +229,10 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/tenants", get(list_tenants))
         .route("/tenants/:tenant_id", get(get_tenant))
+        .route("/verify-email", get(verify_email))
+        .route("/api/auth/config", get(auth_config))
         .route("/api/auth/signup", post(signup))
+        .route("/api/auth/resend-verification", post(resend_verification))
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(me))
@@ -200,7 +244,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chat/audio", post(send_audio_chat))
         .route("/api/chat/new", post(start_new_chat))
         .route("/api/admin/tenants", post(create_tenant))
-        .route("/api/admin/tenants/:tenant_id/model", post(update_tenant_model))
+        .route(
+            "/api/admin/tenants/:tenant_id/model",
+            post(update_tenant_model),
+        )
         .with_state(state)
 }
 
@@ -234,10 +281,12 @@ async fn css_asset(
 ) -> Result<Response, ApiError> {
     let path = sanitize_asset_path(&path)?;
     let full_path = state.web_root.join("css").join(path);
-    let bytes = fs::read(&full_path).await.map_err(|source| AppError::ReadFile {
-        path: full_path.clone(),
-        source,
-    })?;
+    let bytes = fs::read(&full_path)
+        .await
+        .map_err(|source| AppError::ReadFile {
+            path: full_path.clone(),
+            source,
+        })?;
     let mut response = Response::new(bytes.into());
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -252,10 +301,12 @@ async fn js_asset(
 ) -> Result<Response, ApiError> {
     let path = sanitize_asset_path(&path)?;
     let full_path = state.web_root.join("js").join(path);
-    let bytes = fs::read(&full_path).await.map_err(|source| AppError::ReadFile {
-        path: full_path.clone(),
-        source,
-    })?;
+    let bytes = fs::read(&full_path)
+        .await
+        .map_err(|source| AppError::ReadFile {
+            path: full_path.clone(),
+            source,
+        })?;
     let mut response = Response::new(bytes.into());
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -293,48 +344,196 @@ async fn get_tenant(
     }
 }
 
+async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigEnvelope> {
+    Json(AuthConfigEnvelope {
+        turnstile_site_key: state.turnstile.site_key().map(str::to_string),
+        email_verification_enabled: state.email_verification.enabled(),
+    })
+}
+
 async fn signup(
     State(state): State<AppState>,
     jar: CookieJar,
     Json(request): Json<AuthRequest>,
-) -> Result<(CookieJar, Json<AuthEnvelope>), ApiError> {
+) -> Result<(CookieJar, Json<SignupEnvelope>), ApiError> {
     let email = request.email.trim().to_lowercase();
     if !email.contains('@') {
-        return Err(ApiError::bad_request("a valid email is required".to_string()));
+        return Err(ApiError::bad_request(
+            "a valid email is required".to_string(),
+        ));
     }
     if request.password.len() < 8 {
         return Err(ApiError::bad_request(
             "password must be at least 8 characters".to_string(),
         ));
     }
+    state
+        .turnstile
+        .verify_signup_token(&state.http_client, request.turnstile_token.as_deref())
+        .await
+        .map_err(map_turnstile_error)?;
 
     let runtime = state.inner.read().await;
     let tenant_id = resolve_requested_tenant(&runtime, request.tenant_id.as_deref())?;
-    if state
-        .database
-        .find_account_by_email_in_tenant(&tenant_id, &email)?
-        .is_some()
-    {
-        return Err(ApiError::bad_request(
-            "email is already registered for this companion".to_string(),
-        ));
-    }
     let default_tenant = runtime
         .tenants
         .get(&tenant_id)
         .ok_or_else(|| ApiError::internal("default tenant missing".to_string()))?;
+    let tenant_display_name = default_tenant.display_name.clone();
+
+    if let Some(existing) = state
+        .database
+        .find_account_by_email_in_tenant(&tenant_id, &email)?
+    {
+        if existing.email_verified {
+            return Err(ApiError::bad_request(
+                "email is already registered for this companion".to_string(),
+            ));
+        }
+
+        drop(runtime);
+        if state.email_verification.enabled() {
+            send_verification_email_for_account(&state, existing.id, &tenant_display_name, &email)
+                .await?;
+            return Ok((
+                jar,
+                Json(SignupEnvelope {
+                    account: None,
+                    requires_email_verification: true,
+                    email: email.clone(),
+                    message: verification_pending_message(&email),
+                }),
+            ));
+        }
+
+        return Err(ApiError::bad_request(
+            "email is already registered for this companion".to_string(),
+        ));
+    }
 
     let password_hash = auth::hash_password(&request.password)?;
-    let account = state.database.create_account(
-        &default_tenant.id,
-        &email,
-        &password_hash,
-        &default_tenant.display_name,
-    )?;
+    let account = if state.email_verification.enabled() {
+        state.database.create_pending_account(
+            &default_tenant.id,
+            &email,
+            &password_hash,
+            &default_tenant.display_name,
+        )?
+    } else {
+        state.database.create_account(
+            &default_tenant.id,
+            &email,
+            &password_hash,
+            &default_tenant.display_name,
+        )?
+    };
     drop(runtime);
 
+    if state.email_verification.enabled() {
+        send_verification_email_for_account(&state, account.id, &tenant_display_name, &email)
+            .await?;
+        return Ok((
+            jar,
+            Json(SignupEnvelope {
+                account: None,
+                requires_email_verification: true,
+                email: email.clone(),
+                message: verification_pending_message(&email),
+            }),
+        ));
+    }
+
     let (jar, account) = issue_session(&state.database, jar, account)?;
-    Ok((jar, Json(AuthEnvelope { account })))
+    Ok((
+        jar,
+        Json(SignupEnvelope {
+            account: Some(account),
+            requires_email_verification: false,
+            email,
+            message: "Account created".to_string(),
+        }),
+    ))
+}
+
+async fn resend_verification(
+    State(state): State<AppState>,
+    Json(request): Json<ResendVerificationRequest>,
+) -> Result<Json<MessageEnvelope>, ApiError> {
+    let email = request.email.trim().to_lowercase();
+    if !email.contains('@') {
+        return Ok(Json(MessageEnvelope {
+            message: generic_resend_message(),
+        }));
+    }
+
+    let runtime = state.inner.read().await;
+    let tenant_id = resolve_requested_tenant(&runtime, request.tenant_id.as_deref())?;
+    let tenant_display_name = runtime
+        .tenants
+        .get(&tenant_id)
+        .map(|tenant| tenant.display_name.clone())
+        .ok_or_else(|| ApiError::internal("default tenant missing".to_string()))?;
+    drop(runtime);
+
+    if state.email_verification.enabled() {
+        if let Some(account) = state
+            .database
+            .find_account_by_email_in_tenant(&tenant_id, &email)?
+        {
+            if !account.email_verified {
+                send_verification_email_for_account(
+                    &state,
+                    account.id,
+                    &tenant_display_name,
+                    &email,
+                )
+                .await?;
+            }
+        }
+    }
+
+    Ok(Json(MessageEnvelope {
+        message: generic_resend_message(),
+    }))
+}
+
+async fn verify_email(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Query(query): Query<VerifyEmailQuery>,
+) -> Result<(CookieJar, Redirect), ApiError> {
+    let token = query.token.trim();
+    if token.is_empty() {
+        return Ok((jar, Redirect::to("/login.html?verify=invalid")));
+    }
+
+    match state
+        .database
+        .consume_email_verification_token(&auth::hash_session_token(token), Utc::now())?
+    {
+        ConsumeEmailVerificationResult::Verified { account_id } => {
+            let account = state
+                .database
+                .get_account_with_profile(account_id)?
+                .ok_or_else(|| {
+                    ApiError::internal("verified account profile missing".to_string())
+                })?;
+            let redirect_to = if account.profile.onboarding_complete {
+                "/chat.html"
+            } else {
+                "/onboarding.html"
+            };
+            let (jar, _account) = issue_session(&state.database, jar, account)?;
+            Ok((jar, Redirect::to(redirect_to)))
+        }
+        ConsumeEmailVerificationResult::Expired { tenant_id } => {
+            let location = verification_error_location(tenant_id.as_deref(), "expired");
+            Ok((jar, Redirect::to(&location)))
+        }
+        ConsumeEmailVerificationResult::Invalid => {
+            Ok((jar, Redirect::to("/login.html?verify=invalid")))
+        }
+    }
 }
 
 async fn login(
@@ -353,7 +552,14 @@ async fn login(
         .ok_or_else(|| ApiError::bad_request("invalid email or password".to_string()))?;
 
     if !auth::verify_password(&account_record.password_hash, &request.password)? {
-        return Err(ApiError::bad_request("invalid email or password".to_string()));
+        return Err(ApiError::bad_request(
+            "invalid email or password".to_string(),
+        ));
+    }
+    if state.email_verification.enabled() && !account_record.email_verified {
+        return Err(ApiError::forbidden(
+            "check your email to finish creating your account before signing in".to_string(),
+        ));
     }
 
     let account = state
@@ -370,7 +576,9 @@ async fn logout(
     jar: CookieJar,
 ) -> Result<(CookieJar, StatusCode), ApiError> {
     let jar = if let Some(cookie) = jar.get(SESSION_COOKIE) {
-        state.database.delete_session(&auth::hash_session_token(cookie.value()))?;
+        state
+            .database
+            .delete_session(&auth::hash_session_token(cookie.value()))?;
         jar.remove(expired_session_cookie())
     } else {
         jar
@@ -379,10 +587,7 @@ async fn logout(
     Ok((jar, StatusCode::NO_CONTENT))
 }
 
-async fn me(
-    State(state): State<AppState>,
-    jar: CookieJar,
-) -> Result<Json<AuthEnvelope>, ApiError> {
+async fn me(State(state): State<AppState>, jar: CookieJar) -> Result<Json<AuthEnvelope>, ApiError> {
     let account = require_auth(&state, &jar).await?;
     Ok(Json(AuthEnvelope { account }))
 }
@@ -422,20 +627,27 @@ fn validate_profile_request(request: &UpsertProfileInput) -> Result<(), ApiError
             "timezone and checkin_local_time are required".to_string(),
         ));
     }
-    Tz::from_str(request.timezone.trim()).map_err(|_| {
-        ApiError::bad_request("timezone must be a valid IANA timezone".to_string())
-    })?;
+    Tz::from_str(request.timezone.trim())
+        .map_err(|_| ApiError::bad_request("timezone must be a valid IANA timezone".to_string()))?;
     NaiveTime::parse_from_str(request.checkin_local_time.trim(), "%H:%M").map_err(|_| {
         ApiError::bad_request("checkin_local_time must use HH:MM format".to_string())
     })?;
     for (field_name, value, max_len) in [
-        ("companion_name", Some(request.companion_name.as_str()), 60usize),
+        (
+            "companion_name",
+            Some(request.companion_name.as_str()),
+            60usize,
+        ),
         ("user_name", request.user_name.as_deref(), 80usize),
         ("pronouns", request.pronouns.as_deref(), 40usize),
         ("user_context", request.user_context.as_deref(), 600usize),
         ("boundaries", request.boundaries.as_deref(), 400usize),
         ("support_goals", request.support_goals.as_deref(), 400usize),
-        ("preferred_style", request.preferred_style.as_deref(), 160usize),
+        (
+            "preferred_style",
+            request.preferred_style.as_deref(),
+            160usize,
+        ),
         ("companion_tone", request.companion_tone.as_deref(), 80usize),
     ] {
         validate_profile_text_field(field_name, value, max_len)?;
@@ -519,7 +731,9 @@ async fn send_chat(
     let account = require_auth(&state, &jar).await?;
     let input = request.message.trim();
     if input.is_empty() {
-        return Err(ApiError::bad_request("message must not be empty".to_string()));
+        return Err(ApiError::bad_request(
+            "message must not be empty".to_string(),
+        ));
     }
     if input.chars().count() > 4000 {
         return Err(ApiError::bad_request(
@@ -568,7 +782,7 @@ async fn send_audio_chat(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|error| ApiError::bad_request(format!("failed to read audio upload: {error}")))? 
+        .map_err(|error| ApiError::bad_request(format!("failed to read audio upload: {error}")))?
     {
         if field.name() != Some("audio") {
             continue;
@@ -576,10 +790,9 @@ async fn send_audio_chat(
 
         file_name = field.file_name().map(str::to_string);
         mime_type = field.content_type().map(str::to_string);
-        let bytes = field
-            .bytes()
-            .await
-            .map_err(|error| ApiError::bad_request(format!("failed to read audio upload: {error}")))?;
+        let bytes = field.bytes().await.map_err(|error| {
+            ApiError::bad_request(format!("failed to read audio upload: {error}"))
+        })?;
         if bytes.is_empty() {
             return Err(ApiError::bad_request("audio upload was empty".to_string()));
         }
@@ -592,8 +805,9 @@ async fn send_audio_chat(
         break;
     }
 
-    let audio_bytes = audio_bytes
-        .ok_or_else(|| ApiError::bad_request("attach one audio file in the 'audio' field".to_string()))?;
+    let audio_bytes = audio_bytes.ok_or_else(|| {
+        ApiError::bad_request("attach one audio file in the 'audio' field".to_string())
+    })?;
     let mime_type = mime_type.unwrap_or_else(|| "audio/webm".to_string());
     let file_name = inferred_audio_file_name(file_name.as_deref(), &mime_type);
 
@@ -648,10 +862,7 @@ async fn start_new_chat(
     }))
 }
 
-async fn reset_bot(
-    State(state): State<AppState>,
-    jar: CookieJar,
-) -> Result<StatusCode, ApiError> {
+async fn reset_bot(State(state): State<AppState>, jar: CookieJar) -> Result<StatusCode, ApiError> {
     let account = require_auth(&state, &jar).await?;
     state.database.reset_companion(account.id)?;
     Ok(StatusCode::NO_CONTENT)
@@ -666,10 +877,7 @@ async fn delete_account(
     Ok((jar.remove(expired_session_cookie()), StatusCode::NO_CONTENT))
 }
 
-async fn admin_portal(
-    State(state): State<AppState>,
-    jar: CookieJar,
-) -> Result<Response, ApiError> {
+async fn admin_portal(State(state): State<AppState>, jar: CookieJar) -> Result<Response, ApiError> {
     let admin = match require_admin(&state, &jar).await {
         Ok(account) => account,
         Err(error) if error.status == StatusCode::UNAUTHORIZED => {
@@ -698,10 +906,9 @@ async fn create_tenant(
     if tenant_id.is_empty() {
         return Err(ApiError::bad_request("tenant id is required".to_string()));
     }
-    if !tenant_id
-        .chars()
-        .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-' || value == '_')
-    {
+    if !tenant_id.chars().all(|value| {
+        value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-' || value == '_'
+    }) {
         return Err(ApiError::bad_request(
             "tenant id may only contain lowercase letters, numbers, hyphens, and underscores"
                 .to_string(),
@@ -710,7 +917,9 @@ async fn create_tenant(
 
     let display_name = request.display_name.trim().to_string();
     if display_name.is_empty() {
-        return Err(ApiError::bad_request("display_name is required".to_string()));
+        return Err(ApiError::bad_request(
+            "display_name is required".to_string(),
+        ));
     }
 
     let mut state = state.inner.write().await;
@@ -726,7 +935,13 @@ async fn create_tenant(
         .iter()
         .find(|tenant| tenant.id == state.default_tenant_id)
         .map(|tenant| tenant.model.clone())
-        .or_else(|| state.config.tenants.first().map(|tenant| tenant.model.clone()))
+        .or_else(|| {
+            state
+                .config
+                .tenants
+                .first()
+                .map(|tenant| tenant.model.clone())
+        })
         .ok_or_else(|| ApiError::internal("default tenant config missing".to_string()))?;
 
     let model = ModelConfig {
@@ -763,7 +978,10 @@ async fn create_tenant(
             web: Some(WebGatewayConfig { enabled: true }),
             telegram: Some(TokenGatewayConfig {
                 enabled: true,
-                token_env: Some(format!("{}_TELEGRAM_TOKEN", tenant_id.to_ascii_uppercase().replace('-', "_"))),
+                token_env: Some(format!(
+                    "{}_TELEGRAM_TOKEN",
+                    tenant_id.to_ascii_uppercase().replace('-', "_")
+                )),
                 binding: None,
             }),
             whatsapp: None,
@@ -788,16 +1006,20 @@ async fn create_tenant(
         path: tenant_template_dir.to_path_buf(),
         source,
     })?;
-    stdfs::write(&agent_path, render_default_agent_template(&display_name))
-        .map_err(|source| AppError::WriteConfig {
+    stdfs::write(&agent_path, render_default_agent_template(&display_name)).map_err(|source| {
+        AppError::WriteConfig {
             path: agent_path.clone(),
             source,
-        })?;
-    stdfs::write(&bootstrap_path, render_default_bootstrap_template(&display_name))
-        .map_err(|source| AppError::WriteConfig {
-            path: bootstrap_path.clone(),
-            source,
-        })?;
+        }
+    })?;
+    stdfs::write(
+        &bootstrap_path,
+        render_default_bootstrap_template(&display_name),
+    )
+    .map_err(|source| AppError::WriteConfig {
+        path: bootstrap_path.clone(),
+        source,
+    })?;
 
     state.config.tenants.push(tenant_config.clone());
     state
@@ -821,7 +1043,10 @@ async fn update_tenant_model(
     require_admin(&state, &jar).await?;
     let provider = request.provider.trim().to_ascii_lowercase();
     if !provider.is_empty()
-        && !matches!(provider.as_str(), "gemini" | "gemini-openai" | "openai-compatible")
+        && !matches!(
+            provider.as_str(),
+            "gemini" | "gemini-openai" | "openai-compatible"
+        )
     {
         return Err(ApiError::bad_request(
             "only Gemini's OpenAI-compatible endpoint is supported".to_string(),
@@ -842,9 +1067,7 @@ async fn update_tenant_model(
     };
 
     if model.model.is_empty() {
-        return Err(ApiError::bad_request(
-            "model is required".to_string(),
-        ));
+        return Err(ApiError::bad_request("model is required".to_string()));
     }
 
     let mut state = state.inner.write().await;
@@ -940,10 +1163,9 @@ fn expired_session_cookie() -> Cookie<'static> {
 
 async fn serve_html(web_root: &Path, file_name: &str) -> Result<Html<String>, ApiError> {
     let path = web_root.join(file_name);
-    let html = fs::read_to_string(&path).await.map_err(|source| AppError::ReadFile {
-        path,
-        source,
-    })?;
+    let html = fs::read_to_string(&path)
+        .await
+        .map_err(|source| AppError::ReadFile { path, source })?;
     Ok(Html(html))
 }
 
@@ -955,7 +1177,11 @@ fn sanitize_asset_path(path: &str) -> Result<PathBuf, ApiError> {
 }
 
 fn content_type(path: &Path) -> &'static str {
-    match path.extension().and_then(|value| value.to_str()).unwrap_or_default() {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+    {
         "css" => "text/css; charset=utf-8",
         "js" => "application/javascript; charset=utf-8",
         "svg" => "image/svg+xml",
@@ -1070,6 +1296,55 @@ fn map_audio_transcription_error(error: AppError) -> ApiError {
     }
 }
 
+async fn send_verification_email_for_account(
+    state: &AppState,
+    account_id: i64,
+    tenant_display_name: &str,
+    email: &str,
+) -> Result<(), ApiError> {
+    let token = auth::new_session_token();
+    let token_hash = auth::hash_session_token(&token);
+    let expires_at = (Utc::now() + Duration::hours(EMAIL_VERIFICATION_HOURS)).to_rfc3339();
+    state
+        .database
+        .store_email_verification_token(account_id, &token_hash, &expires_at)?;
+    state
+        .email_verification
+        .send_verification_email(tenant_display_name, email, &token)
+        .await?;
+    Ok(())
+}
+
+fn verification_pending_message(email: &str) -> String {
+    format!("We sent a verification link to {email}. Open that email to activate your account.")
+}
+
+fn generic_resend_message() -> String {
+    "If that address belongs to an unverified account, we sent a fresh verification email."
+        .to_string()
+}
+
+fn verification_error_location(tenant_id: Option<&str>, status: &str) -> String {
+    let mut location = format!("/login.html?verify={status}");
+    if let Some(tenant_id) = tenant_id {
+        location.push_str("&tenant=");
+        location.push_str(tenant_id);
+    }
+    location
+}
+
+fn map_turnstile_error(error: AppError) -> ApiError {
+    match error {
+        AppError::Security(message) if message.contains("Turnstile verification failed") => {
+            ApiError::bad_request(
+                "Turnstile could not verify that signup attempt. Please try again.".to_string(),
+            )
+        }
+        AppError::Security(message) => ApiError::bad_request(message),
+        other => other.into(),
+    }
+}
+
 fn configured_admin_emails() -> HashSet<String> {
     env::var("WELLBEING_ADMIN_EMAILS")
         .unwrap_or_default()
@@ -1099,13 +1374,23 @@ fn resolve_requested_tenant(
 mod tests {
     use super::inferred_audio_file_name;
     use super::validate_profile_request;
+    use super::verification_error_location;
     use crate::database::UpsertProfileInput;
 
     #[test]
     fn infers_audio_extension_from_mime_type() {
-        assert_eq!(inferred_audio_file_name(None, "audio/webm"), "voice-note.webm");
-        assert_eq!(inferred_audio_file_name(None, "audio/ogg;codecs=opus"), "voice-note.ogg");
-        assert_eq!(inferred_audio_file_name(None, "audio/x-wav"), "voice-note.wav");
+        assert_eq!(
+            inferred_audio_file_name(None, "audio/webm"),
+            "voice-note.webm"
+        );
+        assert_eq!(
+            inferred_audio_file_name(None, "audio/ogg;codecs=opus"),
+            "voice-note.ogg"
+        );
+        assert_eq!(
+            inferred_audio_file_name(None, "audio/x-wav"),
+            "voice-note.wav"
+        );
     }
 
     #[test]
@@ -1142,8 +1427,23 @@ mod tests {
             quiet_hours: vec!["22:00-07:00".to_string()],
         };
 
-        let error = validate_profile_request(&request).expect_err("companion_name should be rejected");
-        assert!(error.message.contains("companion_name contains instructions"));
+        let error =
+            validate_profile_request(&request).expect_err("companion_name should be rejected");
+        assert!(error
+            .message
+            .contains("companion_name contains instructions"));
+    }
+
+    #[test]
+    fn verification_error_location_keeps_tenant_context() {
+        assert_eq!(
+            verification_error_location(Some("hope"), "expired"),
+            "/login.html?verify=expired&tenant=hope"
+        );
+        assert_eq!(
+            verification_error_location(None, "invalid"),
+            "/login.html?verify=invalid"
+        );
     }
 }
 

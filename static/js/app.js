@@ -3,7 +3,8 @@
 const App = (() => {
   const state = {
     account: null,
-    tenants: []
+    tenants: [],
+    authConfig: null
   };
 
   function $(sel, ctx = document) {
@@ -89,6 +90,22 @@ const App = (() => {
       state.tenants = [];
     }
     return state.tenants;
+  }
+
+  async function loadAuthConfig() {
+    if (state.authConfig) {
+      return state.authConfig;
+    }
+
+    try {
+      state.authConfig = await api('/api/auth/config');
+    } catch (error) {
+      state.authConfig = {
+        turnstile_site_key: null,
+        email_verification_enabled: false
+      };
+    }
+    return state.authConfig;
   }
 
   async function initTenantSelectors() {
@@ -399,6 +416,59 @@ const App = (() => {
     status.textContent = '';
   }
 
+  function hideVerificationHelp(form) {
+    const row = $('[data-verification-help]', form);
+    if (!row) return;
+    row.hidden = true;
+    row.dataset.email = '';
+    row.dataset.tenantId = '';
+  }
+
+  function showVerificationHelp(form, email, tenantId, message) {
+    const row = $('[data-verification-help]', form);
+    if (!row) return;
+    const text = $('[data-verification-help-text]', row);
+    if (text) {
+      text.textContent = message || 'Need another verification email?';
+    }
+    row.dataset.email = email || '';
+    row.dataset.tenantId = tenantId || '';
+    row.hidden = false;
+  }
+
+  async function resendVerificationFromForm(form, button) {
+    const row = $('[data-verification-help]', form);
+    if (!row) return;
+    const email = optionalValue(row.dataset.email);
+    const tenantId = optionalValue(row.dataset.tenantId) || currentTenantId();
+    if (!email) {
+      toast('Enter your email first, then try again.');
+      return;
+    }
+
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Sending...';
+    try {
+      const response = await api('/api/auth/resend-verification', {
+        method: 'POST',
+        body: JSON.stringify({
+          email,
+          tenant_id: tenantId
+        })
+      });
+      setFormStatus(form, 'pending', response.message);
+      toast(response.message, 5200);
+    } catch (error) {
+      const message = error.message || 'I could not resend that email just now.';
+      setFormStatus(form, 'error', message);
+      toast(message, 5200);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
+
   function setSubmitting(form, submitting, pendingLabel) {
     const submit = $('[type="submit"]', form);
     if (!submit) return;
@@ -429,6 +499,7 @@ const App = (() => {
     const loginForm = $('#login-form');
     const signupForm = $('#signup-form');
     if (!loginForm && !signupForm) return;
+    const authConfig = await loadAuthConfig();
 
     const existing = await loadSession();
     if (existing) {
@@ -440,17 +511,52 @@ const App = (() => {
       $('#tab-btn-signup')?.click();
     }
 
+    const verifyState = new URLSearchParams(window.location.search).get('verify');
+    if (verifyState === 'expired') {
+      setFormStatus(
+        loginForm,
+        'error',
+        'That verification link has expired. Enter your email below if you want a fresh one.'
+      );
+    } else if (verifyState === 'invalid') {
+      setFormStatus(
+        loginForm,
+        'error',
+        'That verification link is no longer valid. You can request a new one below.'
+      );
+    }
+
+    [loginForm, signupForm].forEach((form) => {
+      if (!form) return;
+      const resend = $('[data-resend-verification]', form);
+      if (!resend) return;
+      on(resend, 'click', () => resendVerificationFromForm(form, resend));
+    });
+
+    let turnstileController = {
+      enabled: false,
+      token: () => null,
+      reset: () => {}
+    };
+    if (signupForm) {
+      turnstileController = await initSignupTurnstile(signupForm, authConfig);
+    }
+
     if (loginForm) {
       on(loginForm, 'submit', async (event) => {
         event.preventDefault();
+        clearFormStatus(loginForm);
+        hideVerificationHelp(loginForm);
         try {
           const form = new FormData(loginForm);
+          const tenantId = optionalValue(form.get('tenant_id')) || currentTenantId();
           const response = await api('/api/auth/login', {
             method: 'POST',
             body: JSON.stringify({
               email: form.get('email'),
               password: form.get('password'),
-              tenant_id: optionalValue(form.get('tenant_id')) || currentTenantId()
+              tenant_id: tenantId,
+              turnstile_token: null
             })
           });
           state.account = response.account;
@@ -458,7 +564,23 @@ const App = (() => {
           toast('Signed in');
           window.location.href = response.account.profile.onboarding_complete ? '/chat.html' : '/onboarding.html';
         } catch (error) {
-          toast(error.message);
+          const form = new FormData(loginForm);
+          const email = optionalValue(form.get('email'));
+          const tenantId = optionalValue(form.get('tenant_id')) || currentTenantId();
+          const message = error.message || 'Unable to sign in.';
+          if (message.toLowerCase().includes('check your email')) {
+            setFormStatus(loginForm, 'pending', message);
+            showVerificationHelp(
+              loginForm,
+              email,
+              tenantId,
+              'Still waiting on the email? You can ask for a fresh verification link.'
+            );
+            toast(message, 5200);
+          } else {
+            setFormStatus(loginForm, 'error', message);
+            toast(message);
+          }
         }
       });
     }
@@ -466,24 +588,134 @@ const App = (() => {
     if (signupForm) {
       on(signupForm, 'submit', async (event) => {
         event.preventDefault();
+        clearFormStatus(signupForm);
+        hideVerificationHelp(signupForm);
         try {
           const form = new FormData(signupForm);
+          const tenantId = optionalValue(form.get('tenant_id')) || currentTenantId();
+          const turnstileToken = turnstileController.token();
+          if (turnstileController.enabled && !turnstileToken) {
+            const message = 'Complete the Turnstile check before creating your account.';
+            setFormStatus(signupForm, 'error', message);
+            toast(message);
+            return;
+          }
           const response = await api('/api/auth/signup', {
             method: 'POST',
             body: JSON.stringify({
               email: form.get('email'),
               password: form.get('password'),
-              tenant_id: optionalValue(form.get('tenant_id')) || currentTenantId()
+              tenant_id: tenantId,
+              turnstile_token: turnstileToken
             })
           });
+          if (response.requires_email_verification) {
+            setFormStatus(signupForm, 'pending', response.message);
+            showVerificationHelp(
+              signupForm,
+              response.email,
+              tenantId,
+              'Need another email? You can resend the verification link here.'
+            );
+            turnstileController.reset();
+            toast('Check your inbox for a verification link.', 5200);
+            return;
+          }
+
           state.account = response.account;
           rememberTenantId(response.account.tenant_id);
           toast('Account created');
           window.location.href = '/onboarding.html';
         } catch (error) {
-          toast(error.message);
+          const message = error.message || 'Unable to create your account.';
+          setFormStatus(signupForm, 'error', message);
+          toast(message);
+          turnstileController.reset();
         }
       });
+    }
+  }
+
+  let turnstileScriptPromise = null;
+  function loadTurnstileScript() {
+    if (window.turnstile) {
+      return Promise.resolve(window.turnstile);
+    }
+    if (turnstileScriptPromise) {
+      return turnstileScriptPromise;
+    }
+
+    turnstileScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve(window.turnstile);
+      script.onerror = () => reject(new Error('Unable to load Turnstile right now.'));
+      document.head.appendChild(script);
+    });
+    return turnstileScriptPromise;
+  }
+
+  async function initSignupTurnstile(form, authConfig) {
+    const shell = $('[data-turnstile-shell]', form);
+    const widget = $('[data-turnstile-widget]', form);
+    const hint = $('[data-turnstile-hint]', form);
+    if (!shell || !widget || !authConfig?.turnstile_site_key) {
+      if (shell) shell.hidden = true;
+      return {
+        enabled: false,
+        token: () => null,
+        reset: () => {}
+      };
+    }
+
+    shell.hidden = false;
+    let token = null;
+    try {
+      const turnstile = await loadTurnstileScript();
+      const widgetId = turnstile.render(widget, {
+        sitekey: authConfig.turnstile_site_key,
+        theme: 'light',
+        callback(value) {
+          token = value;
+          if (hint) {
+            hint.textContent = 'Thanks — you can finish creating your account now.';
+          }
+        },
+        'expired-callback'() {
+          token = null;
+          if (hint) {
+            hint.textContent = 'That check expired. Please complete it again.';
+          }
+        },
+        'error-callback'() {
+          token = null;
+          if (hint) {
+            hint.textContent = 'Turnstile had trouble loading. Please try again.';
+          }
+        }
+      });
+
+      return {
+        enabled: true,
+        token: () => token,
+        reset: () => {
+          token = null;
+          turnstile.reset(widgetId);
+          if (hint) {
+            hint.textContent = 'Complete the check before creating your account.';
+          }
+        }
+      };
+    } catch (error) {
+      shell.hidden = true;
+      toast(error.message || 'Unable to load Turnstile right now.');
+      return {
+        enabled: false,
+        token: () => null,
+        reset: () => {}
+      };
     }
   }
 

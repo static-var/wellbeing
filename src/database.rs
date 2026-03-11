@@ -21,6 +21,7 @@ pub struct AppDatabase {
 pub struct AccountRecord {
     pub id: i64,
     pub password_hash: String,
+    pub email_verified: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -29,6 +30,7 @@ pub struct AuthenticatedAccount {
     pub tenant_id: String,
     pub email: String,
     pub created_at: String,
+    pub email_verified: bool,
     pub profile: ProfileRecord,
 }
 
@@ -131,6 +133,13 @@ pub struct TelegramBotRecord {
     pub bot_token: String,
 }
 
+#[derive(Clone, Debug)]
+pub enum ConsumeEmailVerificationResult {
+    Verified { account_id: i64 },
+    Expired { tenant_id: Option<String> },
+    Invalid,
+}
+
 impl AppDatabase {
     pub fn open(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -161,8 +170,8 @@ impl AppDatabase {
 
         connection.execute(
             r#"
-            INSERT INTO accounts (tenant_id, email, password_hash, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?4)
+            INSERT INTO accounts (tenant_id, email, password_hash, created_at, updated_at, email_verified_at)
+            VALUES (?1, ?2, ?3, ?4, ?4, ?4)
             "#,
             params![tenant_id, email, password_hash, now],
         )?;
@@ -191,6 +200,49 @@ impl AppDatabase {
             .ok_or_else(|| AppError::InvalidState("new account was not readable".to_string()))
     }
 
+    pub fn create_pending_account(
+        &self,
+        tenant_id: &str,
+        email: &str,
+        password_hash: &str,
+        default_companion_name: &str,
+    ) -> Result<AuthenticatedAccount> {
+        let connection = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+
+        connection.execute(
+            r#"
+            INSERT INTO accounts (tenant_id, email, password_hash, created_at, updated_at, email_verified_at)
+            VALUES (?1, ?2, ?3, ?4, ?4, NULL)
+            "#,
+            params![tenant_id, email, password_hash, now],
+        )?;
+        let account_id = connection.last_insert_rowid();
+
+        connection.execute(
+            r#"
+            INSERT INTO profiles (
+                account_id,
+                companion_name,
+                onboarding_complete,
+                checkins_enabled,
+                timezone,
+                checkin_local_time,
+                checkin_days_json,
+                quiet_hours_json,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, 0, 0, 'UTC', '09:00', '[]', '[]', ?3, ?3)
+            "#,
+            params![account_id, default_companion_name, now],
+        )?;
+
+        self.get_account_with_profile(account_id)?.ok_or_else(|| {
+            AppError::InvalidState("new pending account was not readable".to_string())
+        })
+    }
+
     pub fn find_account_by_email_in_tenant(
         &self,
         tenant_id: &str,
@@ -200,7 +252,7 @@ impl AppDatabase {
         connection
             .query_row(
                 r#"
-                SELECT id, tenant_id, email, password_hash
+                SELECT id, tenant_id, email, password_hash, email_verified_at
                 FROM accounts
                 WHERE tenant_id = ?1 AND email = ?2 AND deleted_at IS NULL
                 "#,
@@ -209,6 +261,7 @@ impl AppDatabase {
                     Ok(AccountRecord {
                         id: row.get(0)?,
                         password_hash: row.get(3)?,
+                        email_verified: row.get::<_, Option<String>>(4)?.is_some(),
                     })
                 },
             )
@@ -274,7 +327,10 @@ impl AppDatabase {
         self.get_account_with_profile(account_id)
     }
 
-    pub fn get_account_with_profile(&self, account_id: i64) -> Result<Option<AuthenticatedAccount>> {
+    pub fn get_account_with_profile(
+        &self,
+        account_id: i64,
+    ) -> Result<Option<AuthenticatedAccount>> {
         let connection = self.connect()?;
         connection
             .query_row(
@@ -284,6 +340,7 @@ impl AppDatabase {
                     a.tenant_id,
                     a.email,
                     a.created_at,
+                    a.email_verified_at,
                     p.companion_name,
                     p.user_name,
                     p.pronouns,
@@ -342,7 +399,11 @@ impl AppDatabase {
         self.get_account_with_profile(account_id)
     }
 
-    pub fn update_profile(&self, account_id: i64, input: &UpsertProfileInput) -> Result<ProfileRecord> {
+    pub fn update_profile(
+        &self,
+        account_id: i64,
+        input: &UpsertProfileInput,
+    ) -> Result<ProfileRecord> {
         let connection = self.connect()?;
         let now = Utc::now().to_rfc3339();
         let next_checkin_at = if input.checkins_enabled {
@@ -432,7 +493,11 @@ impl AppDatabase {
             .ok_or_else(|| AppError::InvalidState("profile update failed".to_string()))
     }
 
-    pub fn list_chat_messages(&self, account_id: i64, limit: usize) -> Result<Vec<ChatMessageRecord>> {
+    pub fn list_chat_messages(
+        &self,
+        account_id: i64,
+        limit: usize,
+    ) -> Result<Vec<ChatMessageRecord>> {
         let connection = self.connect()?;
         let mut statement = connection.prepare(
             r#"
@@ -561,7 +626,11 @@ impl AppDatabase {
         Ok(())
     }
 
-    pub fn list_memory_items(&self, account_id: i64, limit: usize) -> Result<Vec<MemoryItemRecord>> {
+    pub fn list_memory_items(
+        &self,
+        account_id: i64,
+        limit: usize,
+    ) -> Result<Vec<MemoryItemRecord>> {
         let connection = self.connect()?;
         let mut statement = connection.prepare(
             r#"
@@ -664,9 +733,18 @@ impl AppDatabase {
     pub fn reset_companion(&self, account_id: i64) -> Result<()> {
         let connection = self.connect()?;
         let now = Utc::now().to_rfc3339();
-        connection.execute("DELETE FROM chat_messages WHERE account_id = ?1", params![account_id])?;
-        connection.execute("DELETE FROM memory_summaries WHERE account_id = ?1", params![account_id])?;
-        connection.execute("DELETE FROM memory_items WHERE account_id = ?1", params![account_id])?;
+        connection.execute(
+            "DELETE FROM chat_messages WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        connection.execute(
+            "DELETE FROM memory_summaries WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        connection.execute(
+            "DELETE FROM memory_items WHERE account_id = ?1",
+            params![account_id],
+        )?;
         connection.execute(
             r#"
             UPDATE profiles
@@ -700,7 +778,10 @@ impl AppDatabase {
             "#,
             params![now, account_id],
         )?;
-        connection.execute("DELETE FROM telegram_bindings WHERE account_id = ?1", params![account_id])?;
+        connection.execute(
+            "DELETE FROM telegram_bindings WHERE account_id = ?1",
+            params![account_id],
+        )?;
         Ok(())
     }
 
@@ -711,12 +792,30 @@ impl AppDatabase {
             "UPDATE accounts SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
             params![now, account_id],
         )?;
-        connection.execute("DELETE FROM sessions WHERE account_id = ?1", params![account_id])?;
-        connection.execute("DELETE FROM profiles WHERE account_id = ?1", params![account_id])?;
-        connection.execute("DELETE FROM chat_messages WHERE account_id = ?1", params![account_id])?;
-        connection.execute("DELETE FROM memory_summaries WHERE account_id = ?1", params![account_id])?;
-        connection.execute("DELETE FROM memory_items WHERE account_id = ?1", params![account_id])?;
-        connection.execute("DELETE FROM telegram_bindings WHERE account_id = ?1", params![account_id])?;
+        connection.execute(
+            "DELETE FROM sessions WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        connection.execute(
+            "DELETE FROM profiles WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        connection.execute(
+            "DELETE FROM chat_messages WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        connection.execute(
+            "DELETE FROM memory_summaries WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        connection.execute(
+            "DELETE FROM memory_items WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        connection.execute(
+            "DELETE FROM telegram_bindings WHERE account_id = ?1",
+            params![account_id],
+        )?;
         Ok(())
     }
 
@@ -792,6 +891,114 @@ impl AppDatabase {
         Ok(due)
     }
 
+    pub fn store_email_verification_token(
+        &self,
+        account_id: i64,
+        token_hash: &str,
+        expires_at: &str,
+    ) -> Result<()> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let now = Utc::now().to_rfc3339();
+
+        transaction.execute(
+            "DELETE FROM email_verification_tokens WHERE account_id = ?1 AND consumed_at IS NULL",
+            params![account_id],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO email_verification_tokens (
+                account_id,
+                token_hash,
+                expires_at,
+                created_at
+            )
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![account_id, token_hash, expires_at, now],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn consume_email_verification_token(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> Result<ConsumeEmailVerificationResult> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let record = transaction
+            .query_row(
+                r#"
+                SELECT
+                    evt.account_id,
+                    a.tenant_id,
+                    evt.expires_at,
+                    evt.consumed_at,
+                    a.email_verified_at
+                FROM email_verification_tokens evt
+                JOIN accounts a ON a.id = evt.account_id
+                WHERE evt.token_hash = ?1
+                  AND a.deleted_at IS NULL
+                LIMIT 1
+                "#,
+                params![token_hash],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((account_id, tenant_id, expires_at, consumed_at, email_verified_at)) = record
+        else {
+            transaction.commit()?;
+            return Ok(ConsumeEmailVerificationResult::Invalid);
+        };
+
+        if email_verified_at.is_some() {
+            if consumed_at.is_none() {
+                transaction.execute(
+                    "UPDATE email_verification_tokens SET consumed_at = ?1 WHERE token_hash = ?2",
+                    params![now.to_rfc3339(), token_hash],
+                )?;
+            }
+            transaction.commit()?;
+            return Ok(ConsumeEmailVerificationResult::Verified { account_id });
+        }
+
+        let expires_at = parse_timestamp(&expires_at)?;
+        if expires_at < now {
+            transaction.commit()?;
+            return Ok(ConsumeEmailVerificationResult::Expired {
+                tenant_id: Some(tenant_id),
+            });
+        }
+
+        transaction.execute(
+            r#"
+            UPDATE accounts
+            SET email_verified_at = ?1,
+                updated_at = ?1
+            WHERE id = ?2
+            "#,
+            params![now.to_rfc3339(), account_id],
+        )?;
+        transaction.execute(
+            "UPDATE email_verification_tokens SET consumed_at = ?1 WHERE token_hash = ?2",
+            params![now.to_rfc3339(), token_hash],
+        )?;
+        transaction.commit()?;
+
+        Ok(ConsumeEmailVerificationResult::Verified { account_id })
+    }
+
     pub fn record_checkin_attempt(
         &self,
         account_id: i64,
@@ -807,7 +1014,11 @@ impl AppDatabase {
                 updated_at = ?1
             WHERE account_id = ?3
             "#,
-            params![attempted_at.to_rfc3339(), next_checkin_at.to_rfc3339(), account_id],
+            params![
+                attempted_at.to_rfc3339(),
+                next_checkin_at.to_rfc3339(),
+                account_id
+            ],
         )?;
         Ok(())
     }
@@ -1053,6 +1264,7 @@ impl AppDatabase {
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                email_verified_at TEXT,
                 deleted_at TEXT
             );
 
@@ -1146,13 +1358,31 @@ impl AppDatabase {
                 last_error TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS email_verification_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token_hash);
             CREATE INDEX IF NOT EXISTS idx_profiles_due_checkins ON profiles(checkins_enabled, next_checkin_at);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_account ON chat_messages(account_id, id);
             CREATE INDEX IF NOT EXISTS idx_memory_items_account_kind ON memory_items(account_id, kind, id);
             CREATE INDEX IF NOT EXISTS idx_telegram_bindings_chat ON telegram_bindings(chat_id);
+            CREATE INDEX IF NOT EXISTS idx_email_verification_account ON email_verification_tokens(account_id, created_at);
             "#,
         )?;
+        if !has_table_column(&connection, "accounts", "email_verified_at")? {
+            connection.execute("ALTER TABLE accounts ADD COLUMN email_verified_at TEXT", [])?;
+            connection.execute(
+                "UPDATE accounts SET email_verified_at = created_at WHERE deleted_at IS NULL AND email_verified_at IS NULL",
+                [],
+            )?;
+        }
         ensure_profile_column(&connection, "pronouns", "TEXT")?;
         ensure_profile_column(&connection, "boundaries", "TEXT")?;
         ensure_profile_column(&connection, "companion_tone", "TEXT")?;
@@ -1164,11 +1394,7 @@ impl AppDatabase {
             "INTEGER NOT NULL DEFAULT 0",
         )?;
         ensure_profile_column(&connection, "personal_inference_model", "TEXT")?;
-        ensure_profile_column(
-            &connection,
-            "personal_inference_api_key_encrypted",
-            "TEXT",
-        )?;
+        ensure_profile_column(&connection, "personal_inference_api_key_encrypted", "TEXT")?;
         ensure_table_column(
             &connection,
             "telegram_bot_state",
@@ -1182,41 +1408,42 @@ impl AppDatabase {
 }
 
 fn map_account_with_profile(row: &rusqlite::Row<'_>) -> AuthenticatedAccount {
-    let checkin_days_json: String = row.get(23).unwrap_or_else(|_| "[]".to_string());
-    let quiet_hours_json: String = row.get(24).unwrap_or_else(|_| "[]".to_string());
-    let encrypted_api_key: Option<String> = row.get(18).ok();
+    let checkin_days_json: String = row.get(24).unwrap_or_else(|_| "[]".to_string());
+    let quiet_hours_json: String = row.get(25).unwrap_or_else(|_| "[]".to_string());
+    let encrypted_api_key: Option<String> = row.get(19).ok();
 
     AuthenticatedAccount {
         id: row.get(0).unwrap_or_default(),
         tenant_id: row.get(1).unwrap_or_default(),
         email: row.get(2).unwrap_or_default(),
         created_at: row.get(3).unwrap_or_default(),
+        email_verified: row.get::<_, Option<String>>(4).ok().flatten().is_some(),
         profile: ProfileRecord {
-            companion_name: row.get(4).unwrap_or_else(|_| "Companion".to_string()),
-            user_name: row.get(5).ok(),
-            pronouns: row.get(6).ok(),
-            user_context: row.get(7).ok(),
-            boundaries: row.get(8).ok(),
-            support_goals: row.get(9).ok(),
-            preferred_style: row.get(10).ok(),
-            companion_tone: row.get(11).ok(),
-            checkin_frequency: row.get(12).ok(),
-            checkin_style: row.get(13).ok(),
-            telegram_bot_token: row.get(14).ok(),
-            telegram_bot_username: row.get(15).ok(),
-            personal_inference_enabled: i64_to_bool(row.get::<_, i64>(16).unwrap_or(0)),
-            personal_inference_model: row.get(17).ok(),
+            companion_name: row.get(5).unwrap_or_else(|_| "Companion".to_string()),
+            user_name: row.get(6).ok(),
+            pronouns: row.get(7).ok(),
+            user_context: row.get(8).ok(),
+            boundaries: row.get(9).ok(),
+            support_goals: row.get(10).ok(),
+            preferred_style: row.get(11).ok(),
+            companion_tone: row.get(12).ok(),
+            checkin_frequency: row.get(13).ok(),
+            checkin_style: row.get(14).ok(),
+            telegram_bot_token: row.get(15).ok(),
+            telegram_bot_username: row.get(16).ok(),
+            personal_inference_enabled: i64_to_bool(row.get::<_, i64>(17).unwrap_or(0)),
+            personal_inference_model: row.get(18).ok(),
             personal_inference_api_key_configured: encrypted_api_key
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty()),
-            onboarding_complete: i64_to_bool(row.get::<_, i64>(19).unwrap_or(0)),
-            checkins_enabled: i64_to_bool(row.get::<_, i64>(20).unwrap_or(0)),
-            timezone: row.get(21).unwrap_or_else(|_| "UTC".to_string()),
-            checkin_local_time: row.get(22).unwrap_or_else(|_| "09:00".to_string()),
+            onboarding_complete: i64_to_bool(row.get::<_, i64>(20).unwrap_or(0)),
+            checkins_enabled: i64_to_bool(row.get::<_, i64>(21).unwrap_or(0)),
+            timezone: row.get(22).unwrap_or_else(|_| "UTC".to_string()),
+            checkin_local_time: row.get(23).unwrap_or_else(|_| "09:00".to_string()),
             checkin_days: serde_json::from_str(&checkin_days_json).unwrap_or_default(),
             quiet_hours: serde_json::from_str(&quiet_hours_json).unwrap_or_default(),
-            last_active_at: row.get(25).ok(),
-            next_checkin_at: row.get(26).ok(),
+            last_active_at: row.get(26).ok(),
+            next_checkin_at: row.get(27).ok(),
         },
     }
 }
@@ -1248,11 +1475,7 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
 }
 
 fn map_sql_error(error: AppError) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        0,
-        rusqlite::types::Type::Text,
-        Box::new(error),
-    )
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
 
 fn ensure_profile_column(connection: &Connection, column: &str, sql_type: &str) -> Result<()> {
@@ -1286,6 +1509,96 @@ fn ensure_table_column(
     }
 }
 
+fn has_table_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
+    let pragma = format!("PRAGMA table_info({table})");
+    let mut statement = connection.prepare(&pragma)?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn truncate_for_storage(value: &str, max_len: usize) -> String {
     value.chars().take(max_len).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_db_path() -> PathBuf {
+        let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("wellbeing_db_test_{}_{}.db", pid, n))
+    }
+
+    fn open_db() -> AppDatabase {
+        AppDatabase::open(temp_db_path()).unwrap()
+    }
+
+    #[test]
+    fn pending_accounts_start_unverified() {
+        let db = open_db();
+        let account = db
+            .create_pending_account("hope", "pending@test.com", "hash", "Hope")
+            .unwrap();
+
+        assert!(!account.email_verified);
+    }
+
+    #[test]
+    fn consuming_valid_email_token_verifies_account() {
+        let db = open_db();
+        let account = db
+            .create_pending_account("hope", "pending@test.com", "hash", "Hope")
+            .unwrap();
+        let now = Utc::now();
+        db.store_email_verification_token(
+            account.id,
+            "token-hash",
+            &(now + chrono::Duration::hours(24)).to_rfc3339(),
+        )
+        .unwrap();
+
+        let result = db
+            .consume_email_verification_token("token-hash", now)
+            .unwrap();
+        assert!(matches!(
+            result,
+            ConsumeEmailVerificationResult::Verified { account_id } if account_id == account.id
+        ));
+
+        let refreshed = db.get_account_with_profile(account.id).unwrap().unwrap();
+        assert!(refreshed.email_verified);
+    }
+
+    #[test]
+    fn expired_email_token_returns_expired_result() {
+        let db = open_db();
+        let account = db
+            .create_pending_account("hope", "pending@test.com", "hash", "Hope")
+            .unwrap();
+        let now = Utc::now();
+        db.store_email_verification_token(
+            account.id,
+            "expired-hash",
+            &(now - chrono::Duration::hours(1)).to_rfc3339(),
+        )
+        .unwrap();
+
+        let result = db
+            .consume_email_verification_token("expired-hash", now)
+            .unwrap();
+        assert!(matches!(
+            result,
+            ConsumeEmailVerificationResult::Expired { tenant_id: Some(ref tenant_id) } if tenant_id == "hope"
+        ));
+    }
 }

@@ -24,6 +24,27 @@ python3 tools/prompt_harness.py
 
 Use the prompt harness only when you want to test live Gemini behavior with your own key.
 
+## Optional signup protection setup
+
+Wellbeing now supports Cloudflare Turnstile on signup.
+
+- Cloudflare Turnstile on account creation
+
+Environment variables:
+
+```bash
+export WELLBEING_TURNSTILE_SITE_KEY="..."
+export WELLBEING_TURNSTILE_SECRET_KEY="..."
+```
+
+Turnstile notes:
+
+- add your production hostname to the Turnstile widget
+- add `localhost` too if you want the widget to work in local development
+- signup still works without Turnstile only when those env vars are not configured
+
+Email verification support still exists in code, but it stays disabled unless you intentionally add the SES-related environment variables too.
+
 ## Project layout
 
 - `src/` - runtime, web handlers, memory, guardrails, gateways

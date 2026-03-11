@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 aes-gcm-siv = "0.11"
+aws-config = "1"
+aws-sdk-sesv2 = "1"
 base64 = "0.22"
 axum = { version = "0.7", features = ["http1", "json", "multipart", "tokio"] }
 axum-extra = { version = "0.9", features = ["cookie"] }

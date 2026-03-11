@@ -1,16 +1,18 @@
 mod app;
+mod auth;
 mod checkins;
 mod companion;
 mod config;
 mod database;
+mod email;
 mod error;
-mod auth;
 mod guardrails;
 mod heartbeat;
 mod provider;
 mod secrets;
-mod tenant;
 mod telegram;
+mod tenant;
+mod turnstile;
 mod whisper;
 
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
@@ -20,11 +22,8 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::{
-    app::AppState,
-    config::AppConfig,
-    database::AppDatabase,
-    error::Result,
-    tenant::TenantRuntime,
+    app::AppState, config::AppConfig, database::AppDatabase, email::EmailVerificationRuntime,
+    error::Result, tenant::TenantRuntime, turnstile::TurnstileRuntime,
 };
 
 #[tokio::main]
@@ -56,9 +55,24 @@ async fn main() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let database = Arc::new(AppDatabase::open(database_path)?);
-    let state = AppState::new(config_path.clone(), config, tenants, database.clone(), web_root);
+    let turnstile = TurnstileRuntime::from_env()?;
+    let email_verification = EmailVerificationRuntime::from_env().await?;
+    let state = AppState::new(
+        config_path.clone(),
+        config,
+        tenants,
+        database.clone(),
+        web_root,
+        turnstile,
+        email_verification,
+    );
     heartbeat::spawn_heartbeat(heartbeat, state.tenant_count().await);
-    checkins::spawn_checkin_scheduler(database.clone(), state.http_client(), telegram.clone(), checkins);
+    checkins::spawn_checkin_scheduler(
+        database.clone(),
+        state.http_client(),
+        telegram.clone(),
+        checkins,
+    );
     telegram::spawn_gateway(state.clone(), telegram, whisper);
 
     let app = app::router(state);

@@ -53,6 +53,11 @@
                 <label for="login-password">Password</label>
                 <input type="password" id="login-password" name="password" autocomplete="current-password" placeholder="Your password" required />
               </div>
+              <p class="form-status" data-form-status hidden></p>
+              <div class="auth-support-row" data-verification-help hidden>
+                <span class="text-secondary" data-verification-help-text></span>
+                <button type="button" class="btn btn--secondary btn--sm" data-resend-verification>Resend verification email</button>
+              </div>
               <button type="submit" class="btn btn--primary btn--block btn--lg">Sign in</button>
               <p class="text-center text-muted mt-md" style="font-size:0.85rem;">
                 <a href="#">Forgot your password?</a>
@@ -75,6 +80,16 @@
               <div class="form-group">
                 <label for="signup-password">Create a password</label>
                 <input type="password" id="signup-password" name="password" autocomplete="new-password" placeholder="At least 8 characters" required minlength="8" />
+              </div>
+              <div class="form-group" data-turnstile-shell hidden>
+                <label>Quick human check</label>
+                <div data-turnstile-widget></div>
+                <p class="hint" data-turnstile-hint>Complete the check before creating your account.</p>
+              </div>
+              <p class="form-status" data-form-status hidden></p>
+              <div class="auth-support-row" data-verification-help hidden>
+                <span class="text-secondary" data-verification-help-text></span>
+                <button type="button" class="btn btn--secondary btn--sm" data-resend-verification>Resend verification email</button>
               </div>
               <button type="submit" class="btn btn--primary btn--block btn--lg">Create my space</button>
               <p class="text-center text-muted mt-md" style="font-size:0.85rem;">
