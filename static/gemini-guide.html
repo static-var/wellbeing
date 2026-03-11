@@ -96,59 +96,59 @@
 
       <h1 style="font-size: 1.7rem; margin-bottom: var(--space-xs);">Gemini API key setup</h1>
       <p class="text-secondary" style="margin-bottom: var(--space-2xl);">
-        This guide shows you how to create a project in Google AI Studio, generate an API key,
-        and paste that key into Wellbeing. You only provide the key — Wellbeing chooses the Gemini model for you.
+        You only need one thing here: a Gemini API key. This page walks you through creating a project in Google AI Studio,
+        making a key, and pasting it into Wellbeing. We handle the model choice on our side so setup stays simple.
       </p>
 
       <section class="notice" style="margin-bottom: var(--space-2xl);">
-        <strong>Important privacy note</strong>
+        <strong>Privacy note</strong>
         <p>
-          When you add a personal Gemini key, Wellbeing sends your messages to Google's Gemini API using that key.
-          Google — not Wellbeing — receives and processes those requests.
+          When you add your own Gemini key, Wellbeing sends messages to Google's Gemini API with that key.
+          Google processes those requests.
         </p>
         <p>
-          Google's own
+          That means Google's own
           <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">API terms</a>,
           <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">privacy policy</a>,
-          and data-handling rules apply. We do not control Google's retention, review, or policy changes.
+          and data-handling rules apply. We do not control Google's retention or policy changes.
         </p>
       </section>
 
       <section style="margin-bottom: var(--space-2xl);">
-        <h2 style="font-size: 1.3rem; margin-bottom: var(--space-lg);">Step-by-step setup</h2>
+        <h2 style="font-size: 1.3rem; margin-bottom: var(--space-lg);">Step-by-step</h2>
         <div class="guide-steps">
           <div class="guide-step">
             <div>
               <strong>Open Google AI Studio</strong>
-              <p>Go to <a href="https://aistudio.google.com/" target="_blank" rel="noopener">aistudio.google.com</a> and sign in with the Google account you want to use for the API key.</p>
+              <p>Go to <a href="https://aistudio.google.com/" target="_blank" rel="noopener">aistudio.google.com</a> and sign in with the Google account you want to use.</p>
             </div>
           </div>
 
           <div class="guide-step">
             <div>
               <strong>Create or select a project</strong>
-              <p>Open the project switcher in AI Studio and create a new project if you do not already have one. The Gemini API key will belong to that project and its quotas.</p>
+              <p>Use the project switcher in AI Studio. If you do not already have a project, create one. Your Gemini key and quota will belong to that project.</p>
             </div>
           </div>
 
           <div class="guide-step">
             <div>
               <strong>Open the API key page</strong>
-              <p>Go to the AI Studio API-key page for your selected project. If AI Studio asks you to enable billing or confirm project access, complete those steps first.</p>
+              <p>Go to the AI Studio API key page for that project. If Google asks you to confirm project access or set anything up first, do that and come back here.</p>
             </div>
           </div>
 
           <div class="guide-step">
             <div>
               <strong>Create a Gemini API key</strong>
-              <p>Click the button to create a key, then copy it immediately. Gemini API keys usually begin with <code>AIza</code>.</p>
+              <p>Click the button to create a key, then copy it right away. Gemini API keys usually start with <code>AIza</code>.</p>
             </div>
           </div>
 
           <div class="guide-step">
             <div>
               <strong>Paste the key into Wellbeing</strong>
-              <p>Go back to <a href="/onboarding.html">onboarding</a> or <a href="/settings.html">settings</a>, paste the key, and save. Wellbeing stores it encrypted and chooses the model automatically.</p>
+              <p>Go back to <a href="/onboarding.html">onboarding</a> or <a href="/settings.html">settings</a>, paste the key, and save. If server-side key storage is enabled, Wellbeing stores it encrypted.</p>
             </div>
           </div>
         </div>
@@ -157,8 +157,8 @@
       <section style="margin-bottom: var(--space-2xl);">
         <div class="card-note">
           <strong>What you provide vs what Wellbeing decides</strong>
-          <p>You provide only the Gemini API key.</p>
-          <p>Wellbeing decides which Gemini model to use for your companion so we can keep the setup simple and avoid model-picker confusion.</p>
+          <p>You provide the API key.</p>
+          <p>Wellbeing chooses the Gemini model. That keeps setup simpler and avoids making every user pick from a long model list.</p>
         </div>
       </section>
 

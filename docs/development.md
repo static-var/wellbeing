@@ -8,7 +8,7 @@ Run the app from the project root:
 cargo run
 ```
 
-Default local URL:
+Local URL:
 
 ```text
 http://127.0.0.1:8080/
@@ -19,62 +19,51 @@ http://127.0.0.1:8080/
 ```bash
 cargo check
 cargo test
-```
-
-If you are validating live prompts against Gemini with your own local environment:
-
-```bash
 python3 tools/prompt_harness.py
 ```
 
-## Repo layout
+Use the prompt harness only when you want to test live Gemini behavior with your own key.
 
-- `src/` — runtime, web handlers, guardrails, memory, gateways
-- `static/` — landing page, onboarding, settings, chat, admin-adjacent UI
-- `config/` — JSON runtime config
-- `templates/tenant/` — `agent.md` and `bootstrap.md`
-- `tools/` — prompt evaluation utilities
-- `data/` — local SQLite state
+## Project layout
 
-## Memory development notes
+- `src/` - runtime, web handlers, memory, guardrails, gateways
+- `static/` - landing, onboarding, chat, settings, and admin-facing pages
+- `config/` - JSON runtime config
+- `templates/tenant/` - `agent.md` and `bootstrap.md`
+- `tools/` - prompt-testing utilities
+- `data/` - local SQLite state
 
-The current memory system is intentionally lightweight:
+## Memory notes
 
-- transcript history in SQLite
-- rolling summaries
-- structured memory buckets
+The memory system is intentionally lightweight: transcript history, rolling summaries, and structured notes.
 
-When changing memory behavior, prefer realistic conversation-flow tests over tiny extraction-only tests. The main thing to protect is continuity without poisoning the prompt context.
+If you change memory behavior, prefer realistic conversation-flow tests. Tiny extraction-only tests miss the thing that matters most here: whether the companion still feels continuous from one session to the next.
 
-## Safety development notes
+## Safety notes
 
-Changes to prompts, scope rules, or memory should preserve the product boundary:
+Keep the product boundary intact:
 
 - emotional support is in scope
 - work-task execution is out of scope
-- medical/legal/clinical authority is out of scope
-- crisis behavior must stay conservative
+- medical, legal, and clinical authority are out of scope
+- crisis behavior should stay conservative
 
-Do not position the product as therapy, diagnosis, or emergency response.
+Do not position Wellbeing as therapy, diagnosis, or emergency support.
 
-## Frontend notes
-
-The default web experience lives in the static pages under `static/`.
-
-## Manual verification checklist
+## Manual smoke test
 
 - landing page loads
-- signup/login works per tenant
+- signup and login work per tenant
 - onboarding saves profile data
-- chat persists history
+- chat history persists
 - settings save correctly
-- BYOK Gemini save/rotate flow works
-- guardrails intercept out-of-scope prompts
+- Gemini BYOK save and rotate works
+- guardrails catch out-of-scope requests
 - Telegram polling behaves sanely when configured
 
-## Documentation rule
+## Docs rule
 
-All public-facing docs should clearly state that Wellbeing is:
+Public-facing docs should always say two things clearly:
 
-- an emotional support companion
-- not a replacement for therapy or professional help
+- Wellbeing is an emotional support companion
+- it is not a replacement for therapy or professional help

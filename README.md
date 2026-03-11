@@ -1,202 +1,76 @@
 # Wellbeing
 
-Wellbeing is a lightweight, self-hostable emotional support companion.
+Wellbeing is a lightweight, self-hosted emotional support companion.
 
-It is designed to feel like a calm, emotionally aware buddy across a small set of channels rather than a work copilot or general-purpose assistant. The current implementation focuses on a web portal and Telegram, with a runtime architecture that leaves room for WhatsApp and Discord later.
+It is built for reflection, check-ins, and grounded conversation. It is not trying to be your work copilot, your doctor, or your therapist.
 
-**Important:** Wellbeing is not a therapist, crisis service, or replacement for professional medical, mental-health, legal, or emergency support. It is a supportive companion for reflection, check-ins, and emotionally grounded conversation.
+**Important:** Wellbeing is not a replacement for therapy, professional mental health care, medical advice, legal advice, or emergency support. If someone is in crisis, they need real human help.
 
 ## What it does
 
-- supports emotionally supportive chat in a lightweight Rust runtime
-- keeps tenant/persona configuration in JSON plus per-tenant prompt files
-- supports a web portal and Telegram today
-- includes gentle scheduled check-ins
-- supports encrypted personal Gemini BYOK
-- stores conversations and lightweight memory in SQLite
-- uses local guardrails before model calls
-- supports prompt/persona files like `agent.md` and `bootstrap.md`
+- runs as a small Rust service
+- supports the web portal and Telegram today
+- keeps runtime config in `config/config.json`
+- gives each tenant its own `agent.md` and `bootstrap.md`
+- stores chat, check-in state, and memory in SQLite
+- supports personal Gemini BYOK
+- applies local guardrails before model calls
 
 ## Product boundary
 
-Wellbeing is intentionally narrow:
+Wellbeing is intentionally narrow.
 
-- yes to emotional support, reflection, companionship, and gentle check-ins
-- no to work-task completion, coding help, medical advice, legal advice, or crisis-professional positioning
-- no claim that it replaces therapy, psychiatry, emergency care, or clinical judgment
-
-If someone appears to be in crisis, the system should respond with safer boundary-aware guidance rather than pretending to be a clinician.
-
-## Current architecture
-
-- Rust runtime with Axum
-- SQLite for auth, chat history, check-in state, and memory
-- static web portal for landing, onboarding, chat, settings, and admin flows
-- Telegram polling gateway
-- Gemini OpenAI-compatible provider path
-- optional shared Whisper worker for audio-note transcription
-
-Key files:
-
-- `config/config.json` — host/runtime config and tenant registry
-- `templates/tenant/agent.md` — companion purpose and behavioral identity
-- `templates/tenant/bootstrap.md` — startup behavior and memory expectations
-- `src/guardrails.rs` — safety/scope rules and system prompt assembly
-- `src/companion.rs` — chat flow, memory refresh, and provider selection
-- `src/database.rs` — SQLite schema and persistence helpers
-
-## Memory model
-
-Wellbeing uses a lightweight structured memory system instead of a vector database.
-
-Today it stores:
-
-- recent transcripts in SQLite
-- rolling session summaries
-- structured memory items for:
-  - identity
-  - goals
-  - boundaries
-  - preferences
-  - people
-  - relationships
-  - key events
-  - recurring themes
-  - session summary
-
-Blocked and clarify-style turns are stored for audit, but they are intentionally excluded from provider context and should not refresh memory.
-
-## Safety model
-
-Safety is handled in layers:
-
-1. local guardrails inspect the user message before any provider call
-2. blocked or clarify-only turns are handled locally
-3. only allowed turns are sent to the model
-4. assistant output is sanitized before it is returned
-5. unsafe prompt-like profile content is rejected before it enters the system prompt
-
-This keeps the companion aligned with the product boundary: emotional support, not a job assistant or clinical authority.
+It should help with emotional support, companionship, reflection, and gentle check-ins. It should not help with work tasks, coding, medical advice, legal advice, or anything that pretends to be clinical care.
 
 ## Quick start
 
-### Requirements
+Requirements:
 
-- Rust toolchain
-- a Gemini API key if you want live inference
-- optional `WELLBEING_MASTER_KEY` if you want encrypted personal BYOK storage
+- Rust
+- a Gemini API key if you want live model responses
+- optional `WELLBEING_MASTER_KEY` if you want encrypted BYOK storage
 
-### Run locally
+Run it from the project root:
 
 ```bash
 cargo run
 ```
 
-By default the app uses:
+Then open `http://127.0.0.1:8080/`.
 
-- config: `config/config.json`
-- bind address: `127.0.0.1:8080`
-- SQLite database: `data/wellbeing.sqlite`
+## How it is structured
 
-Then open:
+- `config/config.json` keeps host and tenant config
+- `templates/tenant/agent.md` defines the companion's voice and role
+- `templates/tenant/bootstrap.md` sets startup behavior
+- `src/guardrails.rs` handles scope checks, prompt assembly, and reply filtering
+- `src/companion.rs` handles chat flow and memory refresh
+- `src/database.rs` handles SQLite persistence
 
-- `http://127.0.0.1:8080/`
+## Memory and safety
 
-## Configuration
+Memory is deliberately simple: recent chat history, rolling summaries, and structured notes for things like preferences, boundaries, people, relationships, and key events.
 
-Runtime configuration lives in `config/config.json`.
+Safety is layered. Messages are checked before they reach the model, blocked or clarify-only turns stay local, and replies are sanitized on the way out. The goal is simple: keep the companion emotionally supportive without drifting into job-assistant or fake-clinician territory.
 
-That file currently controls:
+## Gemini BYOK
 
-- bind address
-- database path
-- check-in scheduler settings
-- Telegram gateway settings
-- Whisper worker settings
-- tenant definitions
-- provider base URL and model
-- gateway bindings
+Users can add their own Gemini API key during onboarding or in settings. When `WELLBEING_MASTER_KEY` is set, that key is stored encrypted at rest.
 
-Each tenant points at:
+There is also an in-app setup guide at `/gemini-guide.html`.
 
-- an `agent.md`
-- a `bootstrap.md`
-- a model/provider configuration
-- gateway bindings
-- a memory/storage path
+## Development
 
-## BYOK Gemini
-
-Users can optionally provide their own Gemini API key in onboarding/settings.
-
-- the key is encrypted at rest when `WELLBEING_MASTER_KEY` is configured
-- the UI now asks for the key only
-- the runtime chooses the Gemini model automatically
-
-There is also a Gemini setup guide in the app:
-
-- `/gemini-guide.html`
-
-## Testing
-
-Current test coverage includes:
-
-- guardrail/scope regression tests
-- profession-heavy false-positive and false-negative checks
-- memory-flow tests that mock multi-turn conversations, session resets, structured memory capture, session summaries, and prompt-injection filtering
-- people/relationship/event memory tests across session boundaries
-- prompt hardening behavior
-- scheduler and quiet-hours checks
-- Whisper worker URL parsing tests
-- runtime compile validation with `cargo check`
-
-Recommended commands:
+Useful commands:
 
 ```bash
 cargo check
 cargo test
+python3 tools/prompt_harness.py
 ```
 
-Latest local result:
+For more detail, see `docs/development.md`.
 
-- `46` tests passing
+## Contributing
 
-There is also a local prompt harness under `tools/` for real Gemini prompt evaluation:
-
-- `tools/prompt_harness.py`
-- `tools/prompt_cases.json`
-- `tools/system_prompt_candidate.txt`
-
-That harness is intended for local operator-run evaluation with your own API key.
-
-## Deployment notes
-
-Wellbeing is meant to stay lightweight:
-
-- single Rust service
-- SQLite-backed runtime state
-- simple JSON configuration
-- minimal operational surface
-
-This makes it suitable for self-hosted deployments and for running multiple companion instances without building a heavy control plane first.
-
-## Web experience
-
-The default landing page is served at:
-
-- `/`
-
-## Development docs
-
-See:
-
-- `docs/development.md`
-
-## Open source intent
-
-This project is meant to be understandable, hackable, and deployable by small teams or individual operators. If you contribute, please preserve the core product shape:
-
-- lightweight
-- emotionally supportive
-- explicit about safety boundaries
-- not a replacement for therapy or professional help
+If you work on Wellbeing, please keep the product small, calm, and honest about its limits. The whole point is a lightweight emotional support companion, not a general-purpose assistant.
