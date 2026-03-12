@@ -516,10 +516,50 @@ select {
   cursor: pointer;
   border: 1.5px solid var(--primary-soft);
   transition: all var(--duration) var(--ease);
+  padding: 0;
 }
 .topbar-avatar:hover {
   background: var(--primary-soft);
   color: white;
+}
+.topbar-account {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.topbar-menu {
+  position: absolute;
+  top: calc(100% + var(--space-sm));
+  right: 0;
+  min-width: 160px;
+  padding: var(--space-xs);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+}
+.topbar-menu-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.topbar-menu-item:hover,
+.topbar-menu-item:focus-visible {
+  background: var(--bg-warm);
+  color: var(--text);
+  outline: none;
+}
+.topbar-menu-item:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 /* --- Badge / Pill --- */

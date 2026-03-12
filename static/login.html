@@ -40,10 +40,10 @@
           <!-- Login Tab -->
           <div class="tab-content active" id="tab-login" role="tabpanel" aria-labelledby="tab-btn-login">
             <form id="login-form" novalidate>
-              <div class="form-group">
-                <label for="login-tenant">Companion space</label>
+              <div class="form-group" data-tenant-group hidden>
+                <label for="login-tenant">Companion</label>
                 <select id="login-tenant" name="tenant_id" data-tenant-select></select>
-                <p class="hint">Pick the companion space you want to sign into.</p>
+                <p class="hint" data-tenant-hint>Choose the companion you want to sign into.</p>
               </div>
               <div class="form-group">
                 <label for="login-email">Email</label>
@@ -68,10 +68,10 @@
           <!-- Sign Up Tab -->
           <div class="tab-content" id="tab-signup" role="tabpanel" aria-labelledby="tab-btn-signup">
             <form id="signup-form" novalidate>
-              <div class="form-group">
-                <label for="signup-tenant">Companion space</label>
+              <div class="form-group" data-tenant-group hidden>
+                <label for="signup-tenant">Companion</label>
                 <select id="signup-tenant" name="tenant_id" data-tenant-select></select>
-                <p class="hint">New accounts are created inside one companion space at a time.</p>
+                <p class="hint" data-tenant-hint>Choose the companion this account should belong to.</p>
               </div>
               <div class="form-group">
                 <label for="signup-email">Email</label>
@@ -91,7 +91,7 @@
                 <span class="text-secondary" data-verification-help-text></span>
                 <button type="button" class="btn btn--secondary btn--sm" data-resend-verification>Resend verification email</button>
               </div>
-              <button type="submit" class="btn btn--primary btn--block btn--lg">Create my space</button>
+              <button type="submit" class="btn btn--primary btn--block btn--lg">Create account</button>
               <p class="text-center text-muted mt-md" style="font-size:0.85rem;">
                 By creating an account you agree to our <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.
               </p>

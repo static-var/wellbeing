@@ -6,6 +6,7 @@ const App = (() => {
     tenants: [],
     authConfig: null
   };
+  const MAX_COMPANION_NAME_CHARS = 15;
 
   function $(sel, ctx = document) {
     return ctx.querySelector(sel);
@@ -115,7 +116,19 @@ const App = (() => {
     const tenants = await loadTenants();
     if (!tenants.length) return;
 
+    const groups = $$('[data-tenant-group]');
+    const hints = $$('[data-tenant-hint]');
     const selectedTenantId = currentTenantId() || tenants[0].id;
+    const showSelector = tenants.length > 1;
+    groups.forEach((group) => {
+      group.hidden = !showSelector;
+    });
+    hints.forEach((hint) => {
+      hint.textContent = showSelector
+        ? 'Choose the companion you want to use here.'
+        : '';
+    });
+
     selects.forEach((select) => {
       select.innerHTML = '';
       tenants.forEach((tenant) => {
@@ -232,6 +245,60 @@ const App = (() => {
     });
   }
 
+  function initAccountMenu() {
+    const avatarButton = $('#avatar-btn');
+    const accountMenu = $('#account-menu');
+    const logoutButton = $('#logout-btn');
+    if (!avatarButton || !accountMenu || !logoutButton) return;
+
+    function closeMenu() {
+      accountMenu.hidden = true;
+      avatarButton.setAttribute('aria-expanded', 'false');
+    }
+
+    function openMenu() {
+      accountMenu.hidden = false;
+      avatarButton.setAttribute('aria-expanded', 'true');
+      logoutButton.focus();
+    }
+
+    on(avatarButton, 'click', (event) => {
+      event.stopPropagation();
+      if (accountMenu.hidden) {
+        openMenu();
+      } else {
+        closeMenu();
+      }
+    });
+
+    on(logoutButton, 'click', async () => {
+      logoutButton.disabled = true;
+      try {
+        await api('/api/auth/logout', { method: 'POST' });
+        state.account = null;
+        closeMenu();
+        toast('Signed out');
+        window.location.href = '/login.html';
+      } catch (error) {
+        logoutButton.disabled = false;
+        toast(error.message || 'Unable to sign out right now.', 5200);
+      }
+    });
+
+    on(document, 'click', (event) => {
+      if (accountMenu.hidden) return;
+      if (accountMenu.contains(event.target) || avatarButton.contains(event.target)) return;
+      closeMenu();
+    });
+
+    on(document, 'keydown', (event) => {
+      if (event.key === 'Escape' && !accountMenu.hidden) {
+        closeMenu();
+        avatarButton.focus();
+      }
+    });
+  }
+
   function browserTimezone() {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   }
@@ -329,7 +396,7 @@ const App = (() => {
     const checkinsEnabled = frequency !== 'never';
 
     return {
-      companion_name: data.bot_name || 'Hope',
+      companion_name: optionalValue(data.bot_name) || '',
       user_name: optionalValue(data.user_name),
       pronouns: optionalValue(data.pronouns),
       user_context: null,
@@ -357,6 +424,17 @@ const App = (() => {
     if (value == null) return null;
     const trimmed = String(value).trim();
     return trimmed ? trimmed : null;
+  }
+
+  function validateCompanionName(value) {
+    const name = optionalValue(value);
+    if (!name) {
+      return 'Give your companion a name before saving.';
+    }
+    if (Array.from(name).length > MAX_COMPANION_NAME_CHARS) {
+      return `Companion name must be ${MAX_COMPANION_NAME_CHARS} characters or fewer.`;
+    }
+    return null;
   }
 
   function fillProfileForm(form, profile) {
@@ -726,12 +804,29 @@ const App = (() => {
     const account = await requireSession();
     if (!account) return;
     fillProfileForm(form, account.profile);
+    if (!account.profile.onboarding_complete) {
+      const currentTenant = state.tenants.find((tenant) => tenant.id === account.tenant_id);
+      const botNameInput = $('[name="bot_name"]', form);
+      if (
+        botNameInput &&
+        currentTenant &&
+        optionalValue(account.profile.companion_name) === optionalValue(currentTenant.display_name)
+      ) {
+        botNameInput.value = '';
+      }
+    }
     initPersonalInferenceControls(form, account.profile);
     initStepper();
 
     on(form, 'submit', async (event) => {
       event.preventDefault();
       clearFormStatus(form);
+      const companionNameError = validateCompanionName(new FormData(form).get('bot_name'));
+      if (companionNameError) {
+        setFormStatus(form, 'error', companionNameError);
+        toast(companionNameError);
+        return;
+      }
       setSubmitting(form, true, 'Saving...');
       try {
         const profile = await api('/api/me/profile', {
@@ -765,6 +860,12 @@ const App = (() => {
     on(form, 'submit', async (event) => {
       event.preventDefault();
       clearFormStatus(form);
+      const companionNameError = validateCompanionName(new FormData(form).get('bot_name'));
+      if (companionNameError) {
+        setFormStatus(form, 'error', companionNameError);
+        toast(companionNameError);
+        return;
+      }
       setSubmitting(form, true, 'Saving...');
       try {
         const profile = await api('/api/me/profile', {
@@ -1266,6 +1367,7 @@ const App = (() => {
     populateTimezoneSelects();
     $$('.tabs').forEach((tabs) => initTabs(tabs.parentElement));
     initModals();
+    initAccountMenu();
     await initLoginForm();
     await initOnboardingForm();
     await initSettingsForm();

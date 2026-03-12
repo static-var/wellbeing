@@ -19,8 +19,23 @@
       <nav class="topbar-nav" aria-label="Main navigation">
         <a href="/chat.html" class="topbar-link">Chat</a>
         <a href="/settings.html" class="topbar-link active" aria-current="page">Settings</a>
-        <div class="topbar-avatar" aria-label="Your profile" title="Profile" id="avatar-btn">
-          <span aria-hidden="true">Y</span>
+        <div class="topbar-account">
+          <button
+            type="button"
+            class="topbar-avatar"
+            aria-label="Open account menu"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            title="Account"
+            id="avatar-btn"
+          >
+            <span aria-hidden="true">Y</span>
+          </button>
+          <div class="topbar-menu" id="account-menu" role="menu" hidden>
+            <button type="button" class="topbar-menu-item" id="logout-btn" role="menuitem">
+              Log out
+            </button>
+          </div>
         </div>
       </nav>
     </div>
@@ -68,7 +83,8 @@
           <div class="card">
             <div class="form-group">
               <label for="s-bot_name">Companion name</label>
-              <input type="text" id="s-bot_name" name="bot_name" placeholder="e.g. Kira, Sol, Ember" />
+              <input type="text" id="s-bot_name" name="bot_name" placeholder="e.g. Kira, Sol, Ember" maxlength="15" />
+              <p class="hint">Up to 15 characters.</p>
             </div>
             <div class="form-group">
               <label for="s-companion_tone">Personality</label>
